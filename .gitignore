@@ -1,0 +1,10 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.idea/
+data/raw/*.json
+data/processed/*.csv
+data/processed/*.csv.tmp
+data/processed/summary.json

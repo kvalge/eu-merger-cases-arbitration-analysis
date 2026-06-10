@@ -1,0 +1,90 @@
+# =============================================================================
+# Search terms configuration — arbitration terminology across EU languages
+# =============================================================================
+#
+# FORMAT RULES:
+#   - One rule per line: LANG: term
+#   - Language code must match the attachmentLanguage field
+#     (two-letter uppercase code, e.g. EN, DE, FR)
+#   - Empty lines and lines starting with # are ignored
+#   - Wildcard * matches any number of characters (e.g. arbitrat* matches
+#     arbitration, arbitrator, arbitral, arbitrating, etc.)
+#   - AND condition: separate multiple terms with a colon AFTER the language code
+#       Example:  CZ: rozhodč*:řízen*   (both must appear somewhere in the text)
+#   - OR condition: put each variant on its own line
+#
+# HOW TO EDIT:
+#   - To add a term:        add a new line with the language code prefix
+#   - To remove a term:     delete the line or comment it out with #
+#   - To add an AND pair:   LANG: term1*:term2*
+#
+# =============================================================================
+ 
+BG: арбитраж*
+ 
+CS: rozhodč*:řízen*
+CS: arbitraž*
+ 
+DA: voldgift*
+ 
+DE: Schiedsgericht*
+DE: Schiedsverfahren*
+DE: Schiedsklausel*
+DE: Schiedsgutachten*
+DE: Schieds*
+ 
+EL: διαιτη*
+ 
+EN: arbitrat*
+ 
+ES: arbitraj*
+ES: procedimiento arbitral*
+ 
+ET: vahekoh*
+ET: arbitraaž*
+ 
+FI: välitysl*
+FI: välitysm*
+FI: välimies*
+FI: välimiesmenettel*
+FI: välitysmenettely*
+FI: välityslautakunta*
+ 
+FR: arbitrag*
+# FR: arbitral*  — too broad, causing false positives 
+FR: tribunal arbitral*
+FR: clause compromissoire*
+FR: procédure arbitrale*
+FR: arbitrage contractuel*
+ 
+GA: eadrá*
+ 
+HR: arbitraž*
+ 
+HU: választottbír*
+ 
+IT: arbitral*
+ 
+LT: arbitra*
+ 
+LV: šķīrējties*
+ 
+MT: arbitraġ*
+MT: artbiral*
+ 
+NL: arbitrag*
+ 
+PL: arbitraż*
+ 
+PT: arbitrag*
+ 
+RO: arbitraj*
+ 
+SK: rozhodcovsk*
+ 
+SL: arbitraž*
+ 
+# SV: skilje*  — too broad: matches 'skiljer' (= differs/distinguishes), causing false positives
+SV: skiljeförfar*
+SV: skiljenämnd*
+SV: skiljedom*
