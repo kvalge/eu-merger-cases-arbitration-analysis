@@ -312,7 +312,7 @@ If `attachments.csv` already exists, load it and index rows by `(att_attachmentL
 
 **Skip PDF step when:** already processed successfully (`pdf_processed_at` set, `pdf_processing_error` empty).
 
-**Partial progress:** after merging metadata, write `attachments.csv` once. After **each** PDF is processed, rewrite the CSV atomically (via a `.tmp` file). If the run is interrupted (e.g. Ctrl+C), already-finished PDFs remain in the CSV and are skipped on the next run. A PDF interrupted mid-download (before `pdf_processed_at` is set) will be retried.
+**Partial progress:** after merging metadata, write `attachments.csv` once. After **each** PDF is processed, rewrite the CSV atomically (via a `.tmp` file). If the run is interrupted (e.g. Ctrl+C), already-finished PDFs remain in the CSV and are skipped on the next run. A PDF interrupted mid-download (before `pdf_processed_at` is set) will be retried. On interrupt, log overall progress as `processed/total` PDFs (all rows in the CSV) plus how many were completed in that run.
 
 ### PDF step (per attachment)
 

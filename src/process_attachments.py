@@ -183,6 +183,13 @@ def count_pdfs_to_process(
     return min(pending, test_limit)
 
 
+def count_overall_pdf_progress(rows: list[dict[str, str]]) -> tuple[int, int]:
+    """Return (processed_count, total_count) across all attachment rows."""
+    total = len(rows)
+    processed = sum(1 for row in rows if row.get("pdf_processed_at"))
+    return processed, total
+
+
 def resolve_attachment_language(row: dict[str, str]) -> str:
     """Read attachment language from flattened metadata columns."""
     language = row.get("att_attachmentLanguage") or row.get("att_language") or ""
@@ -303,26 +310,34 @@ def log_run_summary(
     pdf_processing_started_at: float | None,
     *,
     interrupted: bool = False,
+    overall_processed: int | None = None,
+    overall_total: int | None = None,
 ) -> None:
     """Log end-of-run or interrupted summary."""
+    overall_suffix = ""
+    if overall_processed is not None and overall_total is not None:
+        overall_suffix = f" | Overall: {overall_processed}/{overall_total} PDFs"
+
     prefix = "Interrupted after" if interrupted else "Processed PDFs:"
     if pdf_processing_started_at is not None:
         elapsed = time.monotonic() - pdf_processing_started_at
         logging.info(
-            "%s %s | Hits: %s | Errors: %s | Time: %s",
+            "%s %s | Hits: %s | Errors: %s | Time: %s%s",
             prefix,
             processed_count,
             hit_count,
             error_count,
             format_duration(elapsed),
+            overall_suffix,
         )
     else:
         logging.info(
-            "%s %s | Hits: %s | Errors: %s",
+            "%s %s | Hits: %s | Errors: %s%s",
             prefix,
             processed_count,
             hit_count,
             error_count,
+            overall_suffix,
         )
 
 
@@ -401,10 +416,13 @@ def process_attachments(args: argparse.Namespace) -> int:
 
     except KeyboardInterrupt:
         exit_code = 130
+        overall_processed, overall_total = count_overall_pdf_progress(rows)
         logging.warning(
-            "Interrupted — progress saved to %s (%s PDF(s) completed this run)",
-            ATTACHMENTS_CSV_PATH,
+            "Interrupted — %s/%s PDFs processed overall (%s this run) — progress saved to %s",
+            overall_processed,
+            overall_total,
             processed_count,
+            ATTACHMENTS_CSV_PATH,
         )
         log_run_summary(
             processed_count,
@@ -412,14 +430,19 @@ def process_attachments(args: argparse.Namespace) -> int:
             error_count,
             pdf_processing_started_at,
             interrupted=True,
+            overall_processed=overall_processed,
+            overall_total=overall_total,
         )
         return exit_code
 
+    overall_processed, overall_total = count_overall_pdf_progress(rows)
     log_run_summary(
         processed_count,
         hit_count,
         error_count,
         pdf_processing_started_at,
+        overall_processed=overall_processed,
+        overall_total=overall_total,
     )
     if error_count > 0:
         logging.info("Some downloads failed — re-run with --retry-downloads")
