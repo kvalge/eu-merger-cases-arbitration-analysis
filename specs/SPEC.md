@@ -17,7 +17,14 @@ A small **Python** project that:
 
 **Python:** 3.10 or newer.
 
-**Project layout:** Python scripts live in [`src/`](../src/) (`download_json.py`, `process_attachments.py`, `summarize_results.py`, `run_pipeline.py`, `pipeline_utils.py`). Run them from the project root.
+**Project layout:** All scripts live under [`scripts/`](../scripts/):
+
+| Folder | Scripts |
+|--------|---------|
+| [`scripts/pipeline/`](../scripts/pipeline/) | `download_json.py`, `process_attachments.py`, `summarize_results.py`, `run_pipeline.py`, `pipeline_utils.py` |
+| [`scripts/analyses/`](../scripts/analyses/) | CSV analysis scripts; output to `data/analysis/*.txt` |
+
+Run all commands from the project root.
 
 ---
 
@@ -187,9 +194,12 @@ While reading the JSON, collect **all** metadata field names from case, decision
 
 Rules:
 
-- Store everything as text.
-- If a value is a list, join items with ` | `.
-- If a value is a nested object (not a list), serialize as a JSON string.
+- Store everything as flat text — **no nested JSON in column values**.
+- Plain list values (strings, numbers) → one column named after the field; multiple items joined with ` | `.
+- Objects shaped like `{"code":"…","label":"…"}` → `{field}_code` and `{field}_label` columns.
+- Objects shaped like `{"items":[{…}, …]}` → one column per item property, e.g. `{field}_reference`, `{field}_publishedDate`.
+- Other nested objects → one column per property using `{field}_{property}` naming.
+- **`dec_decisionNumber` normalization:** store all values as plain text strings. Numeric source values stay as digit strings (e.g. `40398`). GUID-style source values such as `{01760B06-ADDB-4DA5-B8B4-3B32B85DCB75}` are stored without braces, uppercased (e.g. `01760B06-ADDB-4DA5-B8B4-3B32B85DCB75`).
 - New fields in future JSON releases → new columns on the next run.
 - Skip rows missing `attachmentLink` or `metadataReference`.
 - **No duplicate columns:** fixed columns win. When flattening attachment metadata, do **not** add dynamic `att_*` columns for keys already represented in the fixed column list (`attachmentLink`, `metadataReference`, and other fixed-derived fields).
@@ -239,9 +249,9 @@ Document run order in `README.md`.
 Runs the full pipeline in order:
 
 ```bash
-python src/run_pipeline.py
-python src/run_pipeline.py --test-limit 100
-python src/run_pipeline.py --retry-downloads
+python scripts/pipeline/run_pipeline.py
+python scripts/pipeline/run_pipeline.py --test-limit 100
+python scripts/pipeline/run_pipeline.py --retry-downloads
 ```
 
 **Behaviour:**
@@ -259,7 +269,7 @@ Forward any unrecognized flags to `process_attachments.py` only.
 **Run:**
 
 ```bash
-python src/download_json.py
+python scripts/pipeline/download_json.py
 ```
 
 **Behaviour:**
@@ -279,9 +289,9 @@ python src/download_json.py
 **Run:**
 
 ```bash
-python src/process_attachments.py
-python src/process_attachments.py --test-limit 100    # smoke test: only 100 PDFs
-python src/process_attachments.py --retry-downloads   # retry failed downloads
+python scripts/pipeline/process_attachments.py
+python scripts/pipeline/process_attachments.py --test-limit 100    # smoke test: only 100 PDFs
+python scripts/pipeline/process_attachments.py --retry-downloads   # retry failed downloads
 ```
 
 ### Flatten JSON
@@ -313,6 +323,8 @@ If `attachments.csv` already exists, load it and index rows by `(att_attachmentL
 **Skip PDF step when:** already processed successfully (`pdf_processed_at` set, `pdf_processing_error` empty).
 
 **Partial progress:** after merging metadata, write `attachments.csv` once. After **each** PDF is processed, rewrite the CSV atomically (via a `.tmp` file). If the run is interrupted (e.g. Ctrl+C), already-finished PDFs remain in the CSV and are skipped on the next run. A PDF interrupted mid-download (before `pdf_processed_at` is set) will be retried. On interrupt, log overall progress as `processed/total` PDFs (all rows in the CSV) plus how many were completed in that run.
+
+**Windows file locks:** if `attachments.csv` is open in Excel or another program, saving may fail with `PermissionError`. The script retries a few times, then stops with a clear message. Close programs that lock the CSV before running. If save still fails after processing a PDF, that PDF’s result is not in the CSV and will be retried on the next run.
 
 ### PDF step (per attachment)
 
@@ -364,7 +376,7 @@ Use stdlib `logging` at **INFO** level by default. Every warning/error must incl
 **Run:**
 
 ```bash
-python src/summarize_results.py
+python scripts/pipeline/summarize_results.py
 ```
 
 Reads `attachments.csv` only. Prints a report to stdout and writes `data/processed/summary.json`.
@@ -430,17 +442,17 @@ pip install -r requirements.txt
 # 4. Add config/keywords.txt (see Keyword configuration above)
 
 # 5. Run pipeline
-python src/run_pipeline.py --test-limit 10   # small test first
+python scripts/pipeline/run_pipeline.py --test-limit 10   # small test first
 
 # Or step by step:
-python src/download_json.py
-python src/process_attachments.py --test-limit 10
-python src/summarize_results.py
+python scripts/pipeline/download_json.py
+python scripts/pipeline/process_attachments.py --test-limit 10
+python scripts/pipeline/summarize_results.py
 
 # 6. Full run (hours)
-python src/download_json.py                         # refresh JSON
-python src/process_attachments.py                   # all remaining PDFs
-python src/summarize_results.py
+python scripts/pipeline/download_json.py                         # refresh JSON
+python scripts/pipeline/process_attachments.py                   # all remaining PDFs
+python scripts/pipeline/summarize_results.py
 ```
 
 **Updating later:** run `download_json.py` again, then `process_attachments.py`. Metadata refreshes for all rows; only new or failed PDFs are downloaded.
@@ -459,6 +471,26 @@ __pycache__/
 data/raw/*.json
 data/processed/*.csv
 data/processed/summary.json
+```
+
+---
+
+## Analysis scripts (`scripts/analyses/`)
+
+Read `data/processed/attachments.csv` and write human-readable reports to `data/analysis/*.txt`.
+
+| Script | Output file |
+|--------|-------------|
+| `analyze_decision_number.py` | `data/analysis/decision_number_values.txt` |
+| `analyze_metadata_reference.py` | `data/analysis/metadata_reference_uniqueness.txt` |
+| `analyze_pdf_processed_at.py` | `data/analysis/pdf_processed_at_formats.txt` |
+
+Each report includes a `Generated at:` timestamp. Run from the project root:
+
+```bash
+python scripts/analyses/analyze_decision_number.py
+python scripts/analyses/analyze_metadata_reference.py
+python scripts/analyses/analyze_pdf_processed_at.py
 ```
 
 ---

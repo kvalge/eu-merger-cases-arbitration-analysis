@@ -7,8 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PIPELINE_DIR = Path(__file__).resolve().parent
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,16 +30,16 @@ def main() -> int:
     python = sys.executable
 
     steps = [
-        [python, str(SCRIPT_DIR / "download_json.py")],
+        [python, str(PIPELINE_DIR / "download_json.py")],
     ]
 
-    process_cmd = [python, str(SCRIPT_DIR / "process_attachments.py")]
+    process_cmd = [python, str(PIPELINE_DIR / "process_attachments.py")]
     if args.test_limit is not None:
         process_cmd.extend(["--test-limit", str(args.test_limit)])
     if args.retry_downloads:
         process_cmd.append("--retry-downloads")
     steps.append(process_cmd)
-    steps.append([python, str(SCRIPT_DIR / "summarize_results.py")])
+    steps.append([python, str(PIPELINE_DIR / "summarize_results.py")])
 
     for command in steps:
         exit_code = run_step(command)

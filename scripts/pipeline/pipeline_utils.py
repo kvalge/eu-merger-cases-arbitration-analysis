@@ -19,7 +19,7 @@ HTTP_TIMEOUT = 120
 RETRY_DELAYS = (1, 2, 4)
 MATCH_CONTEXT_LENGTH = 150
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 JSON_URL = (
     "https://compcases-open-data-portal-files-prod.s3.eu-west-1.amazonaws.com/case-data-M.json"
@@ -57,6 +57,10 @@ PDF_RESULT_COLUMNS = [
 ]
 
 ATT_DYNAMIC_EXCLUDE = {"attachmentLink", "metadataReference"}
+
+DECISION_NUMBER_GUID_PATTERN = re.compile(
+    r"^\{([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\}$"
+)
 
 
 def setup_logging() -> None:
@@ -111,15 +115,153 @@ def first_list_value(metadata: dict[str, Any], key: str) -> str:
     return str(values[0])
 
 
-def metadata_value_to_text(value: Any) -> str:
-    """Convert a metadata value to a CSV-safe string."""
-    if isinstance(value, list):
-        return " | ".join(str(item) for item in value)
-    if isinstance(value, dict):
-        return json.dumps(value, ensure_ascii=False)
+def normalize_decision_number(value: str) -> str:
+    """
+    Normalize decision numbers to plain text strings.
+
+    - Numeric values stay as digit strings (e.g. ``40398``).
+    - GUID values lose braces and are uppercased (e.g. ``01760B06-...``).
+    """
+    text = value.strip()
+    if not text:
+        return ""
+    # Metadata lists are joined with " | " when flattened.
+    first_value = text.split(" | ")[0].strip()
+    if first_value.isdigit():
+        return first_value
+
+    guid_match = DECISION_NUMBER_GUID_PATTERN.match(first_value)
+    if guid_match:
+        return guid_match.group(1).upper()
+
+    return first_value
+
+
+def _try_parse_json(value: Any) -> Any:
+    """Parse JSON object/array strings; return other values unchanged."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text or text[0] not in "{[":
+        return value
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return value
+
+
+def _scalar_to_text(value: Any) -> str:
+    """Convert a scalar metadata value to text."""
     if value is None:
         return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
     return str(value)
+
+
+def _join_text_parts(parts: list[str]) -> str:
+    """Join text parts for a CSV cell."""
+    return " | ".join(part for part in parts if part)
+
+
+def _merge_column_parts(target: dict[str, list[str]], columns: dict[str, str]) -> None:
+    """Append column values into grouped lists before final join."""
+    for column, text in columns.items():
+        if text:
+            target.setdefault(column, []).append(text)
+
+
+def _is_code_label_dict(obj: dict[str, Any]) -> bool:
+    """True when an object uses the common code/label metadata shape."""
+    return "code" in obj and "label" in obj
+
+
+def _flatten_parsed_object(obj: dict[str, Any], field_key: str) -> dict[str, str]:
+    """Expand one parsed metadata object into flat text columns."""
+    if not obj:
+        return {}
+
+    if _is_code_label_dict(obj):
+        return {
+            f"{field_key}_code": _scalar_to_text(obj.get("code")),
+            f"{field_key}_label": _scalar_to_text(obj.get("label")),
+        }
+
+    if "items" in obj and isinstance(obj["items"], list):
+        item_parts: dict[str, list[str]] = {}
+        for item in obj["items"]:
+            if isinstance(item, dict):
+                for sub_key, sub_value in item.items():
+                    column = f"{field_key}_{sub_key}"
+                    if isinstance(sub_value, dict):
+                        nested = _flatten_parsed_object(sub_value, column)
+                        _merge_column_parts(item_parts, nested)
+                    elif isinstance(sub_value, list):
+                        for list_item in sub_value:
+                            parsed_item = _try_parse_json(list_item)
+                            if isinstance(parsed_item, dict):
+                                nested = _flatten_parsed_object(parsed_item, column)
+                                _merge_column_parts(item_parts, nested)
+                            else:
+                                text = _scalar_to_text(
+                                    parsed_item if parsed_item is not None else list_item
+                                )
+                                if text:
+                                    item_parts.setdefault(column, []).append(text)
+                    else:
+                        text = _scalar_to_text(sub_value)
+                        if text:
+                            item_parts.setdefault(column, []).append(text)
+            elif item is not None:
+                text = _scalar_to_text(item)
+                if text:
+                    item_parts.setdefault(field_key, []).append(text)
+        return {column: _join_text_parts(parts) for column, parts in item_parts.items()}
+
+    generic_parts: dict[str, list[str]] = {}
+    for sub_key, sub_value in obj.items():
+        column = f"{field_key}_{sub_key}"
+        if isinstance(sub_value, dict):
+            nested = _flatten_parsed_object(sub_value, column)
+            _merge_column_parts(generic_parts, nested)
+        elif isinstance(sub_value, list):
+            for list_item in sub_value:
+                parsed_item = _try_parse_json(list_item)
+                if isinstance(parsed_item, dict):
+                    nested = _flatten_parsed_object(parsed_item, column)
+                    _merge_column_parts(generic_parts, nested)
+                else:
+                    text = _scalar_to_text(parsed_item if parsed_item is not None else list_item)
+                    if text:
+                        generic_parts.setdefault(column, []).append(text)
+        else:
+            text = _scalar_to_text(sub_value)
+            if text:
+                generic_parts.setdefault(column, []).append(text)
+
+    return {column: _join_text_parts(parts) for column, parts in generic_parts.items()}
+
+
+def flatten_field_columns(value: Any, field_key: str) -> dict[str, str]:
+    """Expand one metadata field into flat text columns without nested JSON."""
+    items = value if isinstance(value, list) else [value]
+    merged_parts: dict[str, list[str]] = {}
+
+    for item in items:
+        if item is None:
+            continue
+        parsed = _try_parse_json(item)
+        if isinstance(parsed, dict):
+            columns = _flatten_parsed_object(parsed, field_key)
+            _merge_column_parts(merged_parts, columns)
+        else:
+            text = _scalar_to_text(parsed if parsed is not None else item)
+            if text:
+                merged_parts.setdefault(field_key, []).append(text)
+
+    return {column: _join_text_parts(parts) for column, parts in merged_parts.items()}
 
 
 def flatten_metadata(
@@ -128,13 +270,14 @@ def flatten_metadata(
     *,
     exclude: set[str] | None = None,
 ) -> dict[str, str]:
-    """Flatten metadata dict into prefixed text columns."""
+    """Flatten metadata dict into prefixed text columns without nested JSON values."""
     excluded = exclude or set()
     flattened: dict[str, str] = {}
     for key, value in (metadata or {}).items():
         if key in excluded:
             continue
-        flattened[f"{prefix}{key}"] = metadata_value_to_text(value)
+        for sub_key, text in flatten_field_columns(value, key).items():
+            flattened[f"{prefix}{sub_key}"] = text
     return flattened
 
 

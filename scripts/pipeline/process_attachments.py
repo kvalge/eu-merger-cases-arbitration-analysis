@@ -26,6 +26,7 @@ from pipeline_utils import (
     is_successfully_processed,
     load_keyword_rules,
     match_keywords,
+    normalize_decision_number,
     parse_code_label_items,
     preserve_pdf_columns,
     request_with_retries,
@@ -33,6 +34,9 @@ from pipeline_utils import (
     should_process_pdf,
     utc_now_iso,
 )
+
+CSV_SAVE_RETRIES = 5
+CSV_SAVE_RETRY_DELAYS = (0.5, 1.0, 2.0, 3.0, 5.0)
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,6 +79,14 @@ def load_existing_csv(path: Path) -> dict[tuple[str, str], dict[str, str]]:
         }
 
 
+def collect_dynamic_columns(rows: list[dict[str, str]]) -> set[str]:
+    """Collect non-fixed columns that have at least one non-empty value."""
+    columns: set[str] = set()
+    for row in rows:
+        columns.update(key for key in row if key not in FIXED_COLUMNS)
+    return {column for column in columns if any(row.get(column) for row in rows)}
+
+
 def build_rows_from_json(data: dict) -> tuple[list[dict[str, str]], set[str]]:
     """Flatten JSON into attachment rows and collect dynamic column names."""
     rows: list[dict[str, str]] = []
@@ -92,6 +104,10 @@ def build_rows_from_json(data: dict) -> tuple[list[dict[str, str]], set[str]]:
                 dec_meta.get("decisionTypes")
             )
             dec_flat = flatten_metadata(dec_meta, "dec_")
+            if "dec_decisionNumber" in dec_flat:
+                dec_flat["dec_decisionNumber"] = normalize_decision_number(
+                    dec_flat["dec_decisionNumber"]
+                )
             dynamic_columns.update(dec_flat.keys())
 
             for attachment in decision.get("decisionAttachments") or []:
@@ -300,7 +316,44 @@ def write_csv(
         for row in rows:
             writer.writerow({column: row.get(column, "") for column in fieldnames})
 
-    temp_path.replace(path)
+    last_error: OSError | None = None
+    for attempt in range(CSV_SAVE_RETRIES):
+        try:
+            if path.exists():
+                path.unlink()
+            temp_path.replace(path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            if attempt < CSV_SAVE_RETRIES - 1:
+                delay = CSV_SAVE_RETRY_DELAYS[attempt]
+                logging.warning(
+                    "Could not save %s (file may be open in Excel or another program) — "
+                    "retrying in %ss (%s/%s)",
+                    path,
+                    delay,
+                    attempt + 1,
+                    CSV_SAVE_RETRIES,
+                )
+                time.sleep(delay)
+
+    if temp_path.exists():
+        fallback_path = path.with_name(path.name + ".partial")
+        try:
+            temp_path.replace(fallback_path)
+            logging.error(
+                "Saved progress to %s because %s is locked. Close programs using the CSV, "
+                "then rename the partial file or re-run the pipeline.",
+                fallback_path,
+                path,
+            )
+        except OSError:
+            pass
+
+    raise PermissionError(
+        f"Could not save {path}. Close Excel, editors, or other programs that have "
+        f"attachments.csv open, then re-run. Progress up to the previous PDF is saved."
+    ) from last_error
 
 
 def log_run_summary(
@@ -352,13 +405,19 @@ def process_attachments(args: argparse.Namespace) -> int:
         return 1
 
     data = json.loads(RAW_JSON_PATH.read_text(encoding="utf-8"))
-    new_rows, dynamic_columns = build_rows_from_json(data)
+    new_rows, _ = build_rows_from_json(data)
     existing_by_key = load_existing_csv(ATTACHMENTS_CSV_PATH)
 
-    for old_row in existing_by_key.values():
-        dynamic_columns.update(key for key in old_row if key not in FIXED_COLUMNS)
-
     rows = merge_rows(new_rows, existing_by_key, args.retry_downloads)
+    dynamic_columns = collect_dynamic_columns(rows)
+
+    empty_decision_numbers = sum(1 for row in rows if not row.get("dec_decisionNumber"))
+    if empty_decision_numbers:
+        logging.warning(
+            "dec_decisionNumber empty for %s row(s) (missing in source JSON)",
+            empty_decision_numbers,
+        )
+
     write_csv(rows, dynamic_columns, ATTACHMENTS_CSV_PATH)
 
     rules_by_language = load_keyword_rules(KEYWORDS_PATH)
@@ -434,6 +493,17 @@ def process_attachments(args: argparse.Namespace) -> int:
             overall_total=overall_total,
         )
         return exit_code
+
+    except PermissionError as exc:
+        overall_processed, overall_total = count_overall_pdf_progress(rows)
+        logging.error("%s", exc)
+        logging.warning(
+            "Stopped — %s/%s PDFs processed overall (%s completed before the failed save)",
+            overall_processed,
+            overall_total,
+            max(0, processed_count - 1),
+        )
+        return 1
 
     overall_processed, overall_total = count_overall_pdf_progress(rows)
     log_run_summary(
