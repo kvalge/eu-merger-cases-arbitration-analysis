@@ -9,7 +9,7 @@ A small **Python** project that:
 1. Downloads public European Commission data about **merger cases** (JSON).
 2. Finds every **PDF attachment** linked from decision data.
 3. Downloads each PDF, reads the text, and searches for **arbitration-related words** (in the PDF’s language).
-4. Writes **one CSV file** with all metadata plus hit/no-hit results.
+4. Writes **two CSV files**: attachment rows with PDF hit/no-hit results, and a normalized case-sector lookup table.
 
 **You do not need:** a database, Docker, Airflow, dbt, or a dashboard. Run three scripts manually on your computer (or use `run_pipeline.py`).
 
@@ -99,22 +99,45 @@ Each list item parses as an object with `code` and `label`:
 | `decision_type_code` | `DecisionType310` |
 | `decision_type_label` | `Art. 6(1)(b)` |
 
-### Sector (`sector_code`, `sector_label`)
+### Sector (`case_sectors.csv`)
 
-**Source:** `case.metadata.caseSectors` — a list of JSON strings (case-level, shared by all decisions in the case).
+**Not stored on `attachments.csv`.** Case sectors are written to a separate file so each sector is one row (no ` | ` joining).
+
+**Source:** `case.metadata.caseSectors` — a list of JSON strings (case-level).
 
 Each list item parses as an object with `code` and `label`:
 
 ```json
-{"code": "NaceSectorsG_46", "label": "G.46 - Wholesale trade, except of motor vehicles and motorcycles"}
+{"code": "NaceSectorsH_51_1", "label": "H.51.1 - Passenger air transport"}
 ```
+
+**Output path:** `data/processed/case_sectors.csv`
+
+**Columns (fixed order):**
+
+| Column | Description |
+|--------|-------------|
+| `case_caseNumber` | Case number (e.g. `M.10149`); repeated when a case has multiple sectors |
+| `case_caseSectors_code` | One sector code per row |
+| `case_caseSectors_label` | Matching sector label |
 
 **Parsing rules:**
 
-1. For each item in `caseSectors`, parse the string as JSON.
-2. Collect all `code` values → join with ` | ` → `sector_code`.
-3. Collect all `label` values → join with ` | ` → `sector_label`.
-4. If `caseSectors` is missing or empty: both columns are empty strings.
+1. For each case in the JSON, read `caseNumber` (first list value).
+2. For each item in `caseSectors`, parse the string as JSON and emit one row with that item’s `code` and `label`.
+3. Cases with missing or empty `caseSectors` → no rows for that case.
+4. Rows are sorted by `case_caseNumber`, then `case_caseSectors_code`, then `case_caseSectors_label`.
+
+**Example** (case `M.10149` with two sectors):
+
+| `case_caseNumber` | `case_caseSectors_code` | `case_caseSectors_label` |
+|-------------------|-------------------------|--------------------------|
+| `M.10149` | `NaceSectorsH_51_1` | `H.51.1 - Passenger air transport` |
+| `M.10149` | `NaceSectorsH_50_1` | `H.50.1 - Sea and coastal passenger water transport` |
+
+**Join to attachments:** use `case_caseNumber` on both files (`attachments.csv` has a `case_caseNumber` column from flattened case metadata).
+
+**Excluded from `attachments.csv`:** `caseSectors` is not flattened into `case_caseSectors_code` / `case_caseSectors_label` on attachment rows. Legacy `sector_code` / `sector_label` fixed columns are also removed.
 
 ---
 
@@ -158,13 +181,17 @@ For each non-blank, non-comment line:
 
 ---
 
-## Output: one CSV file
+## Output CSV files
+
+### `attachments.csv`
 
 **Path:** `data/processed/attachments.csv`  
 **Encoding:** UTF-8  
 **Grain:** one row per decision PDF attachment
 
-### Fixed columns (always first, in this order)
+**Excel note:** embedded line breaks in cell values are replaced with spaces on write (`sanitize_csv_cell`) so Excel does not split one logical row into multiple physical lines.
+
+#### Fixed columns (always first, in this order)
 
 | Column | Description |
 |--------|-------------|
@@ -178,11 +205,9 @@ For each non-blank, non-comment line:
 | `pdf_processing_error` | Empty if OK; `download:…` or `processing:…` if failed |
 | `decision_type_code` | Parsed code from `decisionTypes` (see above) |
 | `decision_type_label` | Parsed label (e.g. `Art. 6(1)(b)`) |
-| `sector_code` | Parsed sector code from `caseSectors` |
-| `sector_label` | Parsed sector name |
 | `is_active` | `true` if still in latest JSON; `false` if removed |
 
-### Dynamic metadata columns (after fixed columns)
+#### Dynamic metadata columns (after fixed columns)
 
 While reading the JSON, collect **all** metadata field names from case, decision, and attachment metadata and add them as columns:
 
@@ -200,9 +225,18 @@ Rules:
 - Objects shaped like `{"items":[{…}, …]}` → one column per item property, e.g. `{field}_reference`, `{field}_publishedDate`.
 - Other nested objects → one column per property using `{field}_{property}` naming.
 - **`dec_decisionNumber` normalization:** store all values as plain text strings. Numeric source values stay as digit strings (e.g. `40398`). GUID-style source values such as `{01760B06-ADDB-4DA5-B8B4-3B32B85DCB75}` are stored without braces, uppercased (e.g. `01760B06-ADDB-4DA5-B8B4-3B32B85DCB75`).
+- **`caseSectors` is excluded** from case metadata flattening on attachment rows (sectors live in `case_sectors.csv` only).
 - New fields in future JSON releases → new columns on the next run.
 - Skip rows missing `attachmentLink` or `metadataReference`.
 - **No duplicate columns:** fixed columns win. When flattening attachment metadata, do **not** add dynamic `att_*` columns for keys already represented in the fixed column list (`attachmentLink`, `metadataReference`, and other fixed-derived fields).
+
+### `case_sectors.csv`
+
+**Path:** `data/processed/case_sectors.csv`  
+**Encoding:** UTF-8  
+**Grain:** one row per case sector (see **Sector (`case_sectors.csv`)** above)
+
+Written on every `process_attachments.py` run from the current JSON (not incremental — full replace each run). Uses the same atomic `.tmp` rename and Excel-safe cell sanitization as `attachments.csv`.
 
 ---
 
@@ -227,6 +261,7 @@ Pin exact versions only if reproducibility becomes important; minimum versions a
 flowchart LR
   step1[download_json.py] --> step2[process_attachments.py]
   step2 --> csv[attachments.csv]
+  step2 --> sectors[case_sectors.csv]
   csv --> step3[summarize_results.py]
   runner[run_pipeline.py] --> step1
   runner --> step2
@@ -236,7 +271,7 @@ flowchart LR
 | Step | Script | What it does |
 |------|--------|--------------|
 | 1 | `download_json.py` | Fetch JSON from S3 URL, validate, save |
-| 2 | `process_attachments.py` | Flatten JSON, download PDFs, keyword scan, write CSV |
+| 2 | `process_attachments.py` | Flatten JSON, write `case_sectors.csv`, download PDFs, keyword scan, write `attachments.csv` |
 | 3 | `summarize_results.py` | Print stats, write `summary.json` |
 | all | `run_pipeline.py` | Run steps 1 → 2 → 3 in order |
 
@@ -299,7 +334,8 @@ python scripts/pipeline/process_attachments.py --retry-downloads   # retry faile
 For each case → each decision → each `decisionAttachment`:
 
 - Build a flat dict of metadata (prefixes `case_`, `dec_`, `att_` only).
-- Add parsed `decision_type_*` and `sector_*` columns (see **Parsed fixed columns**).
+- **Exclude** `caseSectors` from case metadata flattening (written to `case_sectors.csv` instead).
+- Add parsed `decision_type_*` columns (see **Parsed fixed columns**).
 - Set `is_active = true`.
 
 ### Metadata refresh (re-run after new JSON download)
@@ -307,7 +343,7 @@ For each case → each decision → each `decisionAttachment`:
 When `attachments.csv` already exists and JSON is downloaded again:
 
 - Match rows by `(att_attachmentLink, att_metadataReference)`.
-- **Overwrite** all metadata columns (`case_*`, `dec_*`, `att_*`, parsed type/sector columns) from the latest JSON.
+- **Overwrite** all metadata columns (`case_*`, `dec_*`, `att_*`, parsed `decision_type_*` columns) from the latest JSON.
 - **Preserve** PDF result columns (`has_keyword_hit`, `matchedKeywords`, `matchedLanguage`, `matchContext`, `pdf_processed_at`, `pdf_processing_error`) when the row was already processed successfully (`pdf_processed_at` set and `pdf_processing_error` empty).
 - Rows only in the old CSV → set `is_active = false`, keep row and PDF columns unchanged.
 
@@ -322,7 +358,7 @@ If `attachments.csv` already exists, load it and index rows by `(att_attachmentL
 
 **Skip PDF step when:** already processed successfully (`pdf_processed_at` set, `pdf_processing_error` empty).
 
-**Partial progress:** after merging metadata, write `attachments.csv` once. After **each** PDF is processed, rewrite the CSV atomically (via a `.tmp` file). If the run is interrupted (e.g. Ctrl+C), already-finished PDFs remain in the CSV and are skipped on the next run. A PDF interrupted mid-download (before `pdf_processed_at` is set) will be retried. On interrupt, log overall progress as `processed/total` PDFs (all rows in the CSV) plus how many were completed in that run.
+**Partial progress:** after merging metadata, write `case_sectors.csv` and `attachments.csv` once. After **each** PDF is processed, rewrite `attachments.csv` atomically (via a `.tmp` file). If the run is interrupted (e.g. Ctrl+C), already-finished PDFs remain in the CSV and are skipped on the next run. A PDF interrupted mid-download (before `pdf_processed_at` is set) will be retried. On interrupt, log overall progress as `processed/total` PDFs (all rows in the CSV) plus how many were completed in that run.
 
 **Windows file locks:** if `attachments.csv` is open in Excel or another program, saving may fail with `PermissionError`. The script retries a few times, then stops with a clear message. Close programs that lock the CSV before running. If save still fails after processing a PDF, that PDF’s result is not in the CSV and will be retried on the next run.
 
@@ -345,7 +381,9 @@ If `attachments.csv` already exists, load it and index rows by `(att_attachmentL
 ### After processing
 
 - Rows in old CSV but not in new JSON → set `is_active = false`, keep row.
-- CSV is written after metadata merge and after each PDF (see **Partial progress** above); final write uses fixed columns + sorted dynamic columns.
+- `case_sectors.csv` is rewritten from the latest JSON on each run.
+- `attachments.csv` is written after metadata merge and after each PDF (see **Partial progress** above); final write uses fixed columns + sorted dynamic columns.
+- All CSV cell values are sanitized on write: embedded `\r`, `\n`, and `\r\n` are replaced with spaces so tools such as Excel do not treat them as extra row breaks.
 
 ### End-of-run message
 
@@ -484,6 +522,7 @@ Read `data/processed/attachments.csv` and write human-readable reports to `data/
 | `analyze_decision_number.py` | `data/analysis/decision_number_values.txt` |
 | `analyze_metadata_reference.py` | `data/analysis/metadata_reference_uniqueness.txt` |
 | `analyze_pdf_processed_at.py` | `data/analysis/pdf_processed_at_formats.txt` |
+| `analyze_column_value_types.py` | `data/analysis/column_value_types.txt` |
 
 Each report includes a `Generated at:` timestamp. Run from the project root:
 
@@ -491,7 +530,10 @@ Each report includes a `Generated at:` timestamp. Run from the project root:
 python scripts/analyses/analyze_decision_number.py
 python scripts/analyses/analyze_metadata_reference.py
 python scripts/analyses/analyze_pdf_processed_at.py
+python scripts/analyses/analyze_column_value_types.py
 ```
+
+`analyze_column_value_types.py` reports, for **every column** in `attachments.csv`, how many cells are empty vs filled, what value **types** appear (e.g. `boolean_string`, `url`, `iso_datetime_utc_offset`), and distinct literal values (full list when cardinality is low).
 
 ---
 

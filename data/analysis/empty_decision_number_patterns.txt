@@ -1,0 +1,98 @@
+Generated at: 2026-06-11T16:59:33+00:00
+
+Column analyzed: dec_decisionNumber
+Total rows: 11114
+Rows with empty dec_decisionNumber: 554 (5.0%)
+Rows with numeric dec_decisionNumber: 10560 (95.0%)
+
+Why empty?
+  The pipeline keeps only plain numeric decision numbers in dec_decisionNumber.
+  Source JSON sometimes uses a GUID instead of a number. Those are cleared to empty.
+  The GUID remains inside dec_metadataReference (pattern: ...-DEC{UUID}).
+
+Shared pattern in empty rows:
+  dec_metadataReference contains DEC{GUID}: 554/554 (100.0%)
+  Same pattern in filled rows: 0/10560 (0.0%)
+
+Unique dec_metadataReference among empty rows: 516
+Average attachments per empty decision: 1.07
+
+Top decision_type_label (empty rows):
+  Art. 6(1)(b): 279 (50.4%)
+  Purchaser approval: 71 (12.8%)
+  Art. 6(1)(b) with conditions & obligations: 63 (11.4%)
+  Art. 8(2) with conditions & obligations: 54 (9.7%)
+  Art. 22 Full referral: 21 (3.8%)
+  Art. 4(4) - Full referral: 20 (3.6%)
+  Decision under remedy review clause: 12 (2.2%)
+  Decision on the implementation of remedies: 9 (1.6%)
+  Art. 9(3) refusal of referral: 3 (0.5%)
+  Art. 4(4) - Partial referral: 3 (0.5%)
+
+Top decision_type_label (filled rows, for comparison):
+  Art. 6(1)(b): 8682 (82.2%)
+  Art. 8(2) with conditions & obligations: 452 (4.3%)
+  Art. 6(1)(b) with conditions & obligations: 306 (2.9%)
+  Art. 4(4) - Full referral: 204 (1.9%)
+  Art. 22 Full referral: 140 (1.3%)
+
+Top decision_type_code (empty rows):
+  DecisionType20310: 278 (50.2%)
+  DecisionType20212: 61 (11.0%)
+  DecisionType201250: 51 (9.2%)
+  DecisionType20600: 39 (7.0%)
+  DecisionType201310: 21 (3.8%)
+  DecisionType201260: 20 (3.6%)
+  DecisionType201220: 20 (3.6%)
+  DecisionType600: 15 (2.7%)
+  DecisionType20730: 9 (1.6%)
+  DecisionType201300: 6 (1.1%)
+
+Adoption year distribution (empty rows):
+  2026: 114 (20.6%)
+  2024: 62 (11.2%)
+  2025: 62 (11.2%)
+  2022: 61 (11.0%)
+  2021: 44 (7.9%)
+  2020: 41 (7.4%)
+  2023: 35 (6.3%)
+  2018: 34 (6.1%)
+  2019: 29 (5.2%)
+  1999: 12 (2.2%)
+
+Adoption year distribution (filled rows, for comparison):
+  2000: 469 (4.4%)
+  2001: 452 (4.3%)
+  2007: 430 (4.1%)
+  2017: 412 (3.9%)
+  2021: 404 (3.8%)
+
+Attachment language (empty rows):
+  EN: 485 (87.5%)
+  FR: 33 (6.0%)
+  DE: 24 (4.3%)
+  ES: 3 (0.5%)
+  IT: 3 (0.5%)
+  DA: 1 (0.2%)
+  EL: 1 (0.2%)
+  FI: 1 (0.2%)
+  NL: 1 (0.2%)
+  PT: 1 (0.2%)
+
+Keyword hits (empty rows):
+  false: 484 (87.4%)
+  true: 70 (12.6%)
+
+Sample dec_metadataReference (empty rows):
+  M.10010-DEC{DE5AA077-94DE-4E6A-8C35-398630A9BD4C}
+  M.10038-DEC{AE7B1343-4B4D-4879-AC44-1E8B3B123FD1}
+  M.10059-DEC{01DAF07B-41D7-4217-BC49-A65D43FD68BE}
+  M.10143-DEC{AF0CE3D0-CF25-4B22-92BF-3B24E475218E}
+  M.10146-DEC{32DEDA6E-03C3-4992-8830-2E2217B1BDED}
+
+Sample dec_metadataReference (filled rows):
+  C.1886-DEC53061
+  C.1887-DEC53082
+  M.10-DEC37964
+  M.10000-DEC52108
+  M.10001-DEC52423

@@ -27,6 +27,7 @@ JSON_URL = (
 RAW_JSON_PATH = PROJECT_ROOT / "data/raw/case-data-M.json"
 RAW_JSON_TEMP_PATH = PROJECT_ROOT / "data/raw/case-data-M.json.tmp"
 ATTACHMENTS_CSV_PATH = PROJECT_ROOT / "data/processed/attachments.csv"
+CASE_SECTORS_CSV_PATH = PROJECT_ROOT / "data/processed/case_sectors.csv"
 SUMMARY_JSON_PATH = PROJECT_ROOT / "data/processed/summary.json"
 KEYWORDS_PATH = PROJECT_ROOT / "config/keywords.txt"
 MIN_CASE_COUNT = 1000
@@ -42,10 +43,25 @@ FIXED_COLUMNS = [
     "pdf_processing_error",
     "decision_type_code",
     "decision_type_label",
-    "sector_code",
-    "sector_label",
     "is_active",
 ]
+
+CASE_SECTORS_COLUMNS = [
+    "case_caseNumber",
+    "case_caseSectors_code",
+    "case_caseSectors_label",
+]
+
+ATTACHMENTS_EXCLUDED_COLUMNS = frozenset(
+    {
+        "sector_code",
+        "sector_label",
+        "case_caseSectors_code",
+        "case_caseSectors_label",
+    }
+)
+
+CASE_METADATA_EXCLUDE = {"caseSectors"}
 
 PDF_RESULT_COLUMNS = [
     "has_keyword_hit",
@@ -55,6 +71,13 @@ PDF_RESULT_COLUMNS = [
     "pdf_processed_at",
     "pdf_processing_error",
 ]
+
+
+def sanitize_csv_cell(value: str) -> str:
+    """Replace embedded line breaks so Excel can open the CSV as one row per record."""
+    if not value:
+        return value
+    return value.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
 
 ATT_DYNAMIC_EXCLUDE = {"attachmentLink", "metadataReference"}
 
@@ -281,10 +304,9 @@ def flatten_metadata(
     return flattened
 
 
-def parse_code_label_items(items: list[Any] | None) -> tuple[str, str]:
-    """Parse JSON code/label objects from metadata list fields."""
-    codes: list[str] = []
-    labels: list[str] = []
+def parse_code_label_item_list(items: list[Any] | None) -> list[tuple[str, str]]:
+    """Parse JSON code/label objects into one (code, label) pair per list item."""
+    pairs: list[tuple[str, str]] = []
 
     for item in items or []:
         try:
@@ -295,12 +317,59 @@ def parse_code_label_items(items: list[Any] | None) -> tuple[str, str]:
             continue
         code = obj.get("code")
         label = obj.get("label")
-        if code:
-            codes.append(str(code))
-        if label:
-            labels.append(str(label))
+        if not code and not label:
+            continue
+        pairs.append(
+            (
+                str(code) if code else "",
+                str(label) if label else "",
+            )
+        )
 
+    return pairs
+
+
+def parse_code_label_items(items: list[Any] | None) -> tuple[str, str]:
+    """Parse JSON code/label objects from metadata list fields."""
+    pairs = parse_code_label_item_list(items)
+    codes = [code for code, _ in pairs if code]
+    labels = [label for _, label in pairs if label]
     return " | ".join(codes), " | ".join(labels)
+
+
+def build_case_sector_rows(data: dict[str, Any]) -> list[dict[str, str]]:
+    """Build one row per case sector (case number repeated when needed)."""
+    rows: list[dict[str, str]] = []
+
+    for case in data.values():
+        case_meta = case.get("metadata") or {}
+        case_number = first_list_value(case_meta, "caseNumber")
+        if not case_number:
+            continue
+
+        for code, label in parse_code_label_item_list(case_meta.get("caseSectors")):
+            rows.append(
+                {
+                    "case_caseNumber": case_number,
+                    "case_caseSectors_code": code,
+                    "case_caseSectors_label": label,
+                }
+            )
+
+    rows.sort(
+        key=lambda row: (
+            row["case_caseNumber"],
+            row["case_caseSectors_code"],
+            row["case_caseSectors_label"],
+        )
+    )
+    return rows
+
+
+def strip_attachment_excluded_columns(row: dict[str, str]) -> None:
+    """Remove sector columns that belong in case_sectors.csv only."""
+    for column in ATTACHMENTS_EXCLUDED_COLUMNS:
+        row.pop(column, None)
 
 
 def pattern_to_regex(pattern: str) -> re.Pattern[str]:

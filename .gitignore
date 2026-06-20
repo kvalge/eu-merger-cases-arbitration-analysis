@@ -4,9 +4,3 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .idea/
-data/raw/*.json
-data/processed/*.csv
-data/processed/*.csv.tmp
-data/processed/*.csv.partial
-data/processed/summary.json
-data/analysis/*.txt

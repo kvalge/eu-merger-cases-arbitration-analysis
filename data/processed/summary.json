@@ -1,0 +1,52 @@
+{
+  "total_attachments": 11118,
+  "active_attachments": 11118,
+  "pdf_processed": 11118,
+  "pdf_errors": 3,
+  "keyword_hits": 353,
+  "relevant_art6_art8": 9959,
+  "hits_in_relevant": 277,
+  "top_matched_keywords": [
+    {
+      "keyword": "arbitrat*",
+      "count": 170
+    },
+    {
+      "keyword": "arbitrag*",
+      "count": 71
+    },
+    {
+      "keyword": "Schieds*",
+      "count": 30
+    },
+    {
+      "keyword": "διαιτη*",
+      "count": 13
+    },
+    {
+      "keyword": "arbitraj*",
+      "count": 13
+    },
+    {
+      "keyword": "voldgift*",
+      "count": 8
+    },
+    {
+      "keyword": "Schiedsverfahren* | Schieds*",
+      "count": 7
+    },
+    {
+      "keyword": "Schiedsgericht* | Schiedsverfahren* | Schieds*",
+      "count": 5
+    },
+    {
+      "keyword": "arbitral*",
+      "count": 5
+    },
+    {
+      "keyword": "arbitrag* | tribunal arbitral*",
+      "count": 5
+    }
+  ],
+  "generated_at": "2026-06-16T20:58:03+00:00"
+}

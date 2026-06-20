@@ -1,0 +1,34 @@
+Generated at: 2026-06-11T17:08:46+00:00
+
+Column: pdf_processed_at
+Total rows: 11114
+Non-empty rows: 11114
+Unique values: 8175
+
+Expected format (from pipeline): ISO-8601 UTC text, e.g. 2026-06-11T10:47:41+00:00
+
+Value format kinds:
+  iso_datetime_utc_offset: 11114 (100.0%)
+
+Earliest timestamp: 2026-06-11T10:47:41+00:00
+Latest timestamp: 2026-06-11T16:19:45+00:00
+
+Rows per processing date (YYYY-MM-DD):
+  2026-06-11: 11114 (100.0%)
+
+String length (all rows, including empty):
+  length 25: 11114
+
+String length (non-empty only):
+  length 25: 11114
+
+Length by format kind:
+  iso_datetime_utc_offset: len 25=11114
+
+Sample values by format kind:
+  iso_datetime_utc_offset:
+    - 2026-06-11T10:47:41+00:00
+    - 2026-06-11T10:47:42+00:00
+    - 2026-06-11T10:47:43+00:00
+    - 2026-06-11T10:47:44+00:00
+    - 2026-06-11T10:47:45+00:00

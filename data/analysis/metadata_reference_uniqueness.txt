@@ -1,0 +1,53 @@
+Generated at: 2026-06-11T16:55:22+00:00
+
+Column: dec_metadataReference
+Total rows: 11114
+Non-empty rows: 11114
+Empty rows: 0
+Unique non-empty values: 10293
+
+All values unique? NO — some values appear on more than one row
+
+Duplicate summary:
+  Values that repeat: 187
+  Rows using those values: 1008
+  Extra rows beyond one per value: 821
+
+How many rows share the same value:
+  appears 2 times: 44 value(s)
+  appears 3 times: 71 value(s)
+  appears 4 times: 4 value(s)
+  appears 5 times: 2 value(s)
+  appears 6 times: 3 value(s)
+  appears 7 times: 2 value(s)
+  appears 9 times: 1 value(s)
+  appears 10 times: 32 value(s)
+  appears 11 times: 24 value(s)
+  appears 12 times: 1 value(s)
+  appears 13 times: 1 value(s)
+  appears 15 times: 1 value(s)
+  appears 16 times: 1 value(s)
+
+Note: duplicates are expected when one decision has multiple PDF attachments; each attachment row shares the same dec_metadataReference.
+
+Top duplicate values (up to 20):
+  16x  M.11033-DEC53792
+  15x  M.11212-DEC54100
+  13x  M.10966-DEC53710
+  12x  M.10807-DEC{CC809FD9-8E96-44FA-9227-C49420FBBF23}
+  11x  M.1383-DEC{0751CC4C-A125-405A-B845-0DAD87DCDD6E}
+  11x  M.1636-DEC39926
+  11x  M.1741-DEC40068
+  11x  M.1806-DEC40141
+  11x  M.1879-DEC40234
+  11x  M.1882-DEC40239
+  11x  M.2187-DEC40579
+  11x  M.2220-DEC40619
+  11x  M.2283-DEC40694
+  11x  M.2333-DEC40754
+  11x  M.2420-DEC40846
+  11x  M.2434-DEC40864
+  11x  M.2498-DEC40937
+  11x  M.2533-DEC40981
+  11x  M.2547-DEC37883
+  11x  M.2706-DEC41171

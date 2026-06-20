@@ -1,0 +1,36 @@
+Generated at: 2026-06-11T17:07:08+00:00
+
+Column: dec_decisionNumber
+Total rows: 11114
+Non-empty rows: 11114
+Unique values: 10293
+
+Value kinds:
+  numeric: 10560 (95.0%)
+  guid: 554 (5.0%)
+
+String length (all rows, including empty):
+  length 5: 10560
+  length 36: 554
+
+String length (non-empty only):
+  length 5: 10560
+  length 36: 554
+
+Length by value kind:
+  guid: len 36=554
+  numeric: len 5=10560
+
+Sample values by kind:
+  guid:
+    - 0024E5AA-B093-4725-B182-90025E9D1325
+    - 00591D5B-ED63-48BA-AD54-B3AA2BE45BB0
+    - 00646E4F-2039-42C4-85B7-EE52AD8CD8BB
+    - 00D5FC6C-EFF9-4F90-A49A-29345D2227D9
+    - 0101DAEA-91F8-4E11-B17C-EF10DE4AE4FF
+  numeric:
+    - 37849
+    - 37851
+    - 37852
+    - 37854
+    - 37856

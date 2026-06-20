@@ -16,9 +16,14 @@ import requests
 from pipeline_utils import (
     ATT_DYNAMIC_EXCLUDE,
     ATTACHMENTS_CSV_PATH,
+    ATTACHMENTS_EXCLUDED_COLUMNS,
+    CASE_METADATA_EXCLUDE,
+    CASE_SECTORS_COLUMNS,
+    CASE_SECTORS_CSV_PATH,
     FIXED_COLUMNS,
     KEYWORDS_PATH,
     RAW_JSON_PATH,
+    build_case_sector_rows,
     empty_pdf_columns,
     extract_pdf_text,
     first_list_value,
@@ -30,8 +35,10 @@ from pipeline_utils import (
     parse_code_label_items,
     preserve_pdf_columns,
     request_with_retries,
+    sanitize_csv_cell,
     setup_logging,
     should_process_pdf,
+    strip_attachment_excluded_columns,
     utc_now_iso,
 )
 
@@ -83,8 +90,16 @@ def collect_dynamic_columns(rows: list[dict[str, str]]) -> set[str]:
     """Collect non-fixed columns that have at least one non-empty value."""
     columns: set[str] = set()
     for row in rows:
-        columns.update(key for key in row if key not in FIXED_COLUMNS)
-    return {column for column in columns if any(row.get(column) for row in rows)}
+        columns.update(
+            key
+            for key in row
+            if key not in FIXED_COLUMNS and key not in ATTACHMENTS_EXCLUDED_COLUMNS
+        )
+    return {
+        column
+        for column in columns
+        if any(row.get(column) for row in rows)
+    }
 
 
 def build_rows_from_json(data: dict) -> tuple[list[dict[str, str]], set[str]]:
@@ -94,8 +109,11 @@ def build_rows_from_json(data: dict) -> tuple[list[dict[str, str]], set[str]]:
 
     for case in data.values():
         case_meta = case.get("metadata") or {}
-        sector_code, sector_label = parse_code_label_items(case_meta.get("caseSectors"))
-        case_flat = flatten_metadata(case_meta, "case_")
+        case_flat = flatten_metadata(
+            case_meta,
+            "case_",
+            exclude=CASE_METADATA_EXCLUDE,
+        )
         dynamic_columns.update(case_flat.keys())
 
         for decision in case.get("decisions") or []:
@@ -130,13 +148,12 @@ def build_rows_from_json(data: dict) -> tuple[list[dict[str, str]], set[str]]:
                     **empty_pdf_columns(),
                     "decision_type_code": decision_code,
                     "decision_type_label": decision_label,
-                    "sector_code": sector_code,
-                    "sector_label": sector_label,
                     "is_active": "true",
                     **case_flat,
                     **dec_flat,
                     **att_flat,
                 }
+                strip_attachment_excluded_columns(row)
                 rows.append(row)
 
     return rows, dynamic_columns
@@ -168,6 +185,7 @@ def merge_rows(
         if key not in new_keys:
             inactive = dict(old_row)
             inactive["is_active"] = "false"
+            strip_attachment_excluded_columns(inactive)
             merged.append(inactive)
 
     return merged
@@ -307,15 +325,46 @@ def write_csv(
 ) -> None:
     """Atomically write rows to CSV with fixed columns first."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = FIXED_COLUMNS + sorted(dynamic_columns)
+    fieldnames = FIXED_COLUMNS + sorted(
+        column for column in dynamic_columns if column not in ATTACHMENTS_EXCLUDED_COLUMNS
+    )
     temp_path = path.with_name(path.name + ".tmp")
 
     with temp_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
-            writer.writerow({column: row.get(column, "") for column in fieldnames})
+            writer.writerow(
+                {
+                    column: sanitize_csv_cell(row.get(column, ""))
+                    for column in fieldnames
+                }
+            )
 
+    replace_csv_atomically(temp_path, path)
+
+
+def write_case_sectors_csv(rows: list[dict[str, str]], path: Path) -> None:
+    """Atomically write the normalized case-sector lookup CSV."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".tmp")
+
+    with temp_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CASE_SECTORS_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    column: sanitize_csv_cell(row.get(column, ""))
+                    for column in CASE_SECTORS_COLUMNS
+                }
+            )
+
+    replace_csv_atomically(temp_path, path)
+
+
+def replace_csv_atomically(temp_path: Path, path: Path) -> None:
+    """Replace a CSV file using the same retry logic as attachment saves."""
     last_error: OSError | None = None
     for attempt in range(CSV_SAVE_RETRIES):
         try:
@@ -410,6 +459,14 @@ def process_attachments(args: argparse.Namespace) -> int:
 
     rows = merge_rows(new_rows, existing_by_key, args.retry_downloads)
     dynamic_columns = collect_dynamic_columns(rows)
+
+    case_sector_rows = build_case_sector_rows(data)
+    write_case_sectors_csv(case_sector_rows, CASE_SECTORS_CSV_PATH)
+    logging.info(
+        "Wrote %s case-sector row(s) to %s",
+        len(case_sector_rows),
+        CASE_SECTORS_CSV_PATH,
+    )
 
     empty_decision_numbers = sum(1 for row in rows if not row.get("dec_decisionNumber"))
     if empty_decision_numbers:
