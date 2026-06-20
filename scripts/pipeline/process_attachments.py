@@ -17,6 +17,8 @@ from pipeline_utils import (
     ATT_DYNAMIC_EXCLUDE,
     ATTACHMENTS_CSV_PATH,
     ATTACHMENTS_EXCLUDED_COLUMNS,
+    ATTACHMENTS_SUMMARY_COLUMNS,
+    ATTACHMENTS_SUMMARY_CSV_PATH,
     CASE_METADATA_EXCLUDE,
     CASE_SECTORS_COLUMNS,
     CASE_SECTORS_CSV_PATH,
@@ -342,25 +344,35 @@ def write_csv(
             )
 
     replace_csv_atomically(temp_path, path)
+    write_columns_csv(rows, ATTACHMENTS_SUMMARY_COLUMNS, ATTACHMENTS_SUMMARY_CSV_PATH)
 
 
-def write_case_sectors_csv(rows: list[dict[str, str]], path: Path) -> None:
-    """Atomically write the normalized case-sector lookup CSV."""
+def write_columns_csv(
+    rows: list[dict[str, str]],
+    fieldnames: list[str],
+    path: Path,
+) -> None:
+    """Atomically write a fixed-schema CSV subset."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(path.name + ".tmp")
 
     with temp_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CASE_SECTORS_COLUMNS, extrasaction="ignore")
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(
                 {
                     column: sanitize_csv_cell(row.get(column, ""))
-                    for column in CASE_SECTORS_COLUMNS
+                    for column in fieldnames
                 }
             )
 
     replace_csv_atomically(temp_path, path)
+
+
+def write_case_sectors_csv(rows: list[dict[str, str]], path: Path) -> None:
+    """Atomically write the normalized case-sector lookup CSV."""
+    write_columns_csv(rows, CASE_SECTORS_COLUMNS, path)
 
 
 def replace_csv_atomically(temp_path: Path, path: Path) -> None:

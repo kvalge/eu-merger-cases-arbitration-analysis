@@ -9,7 +9,7 @@ A small **Python** project that:
 1. Downloads public European Commission data about **merger cases** (JSON).
 2. Finds every **PDF attachment** linked from decision data.
 3. Downloads each PDF, reads the text, and searches for **arbitration-related words** (in the PDF’s language).
-4. Writes **two CSV files**: attachment rows with PDF hit/no-hit results, and a normalized case-sector lookup table.
+4. Writes **three CSV files**: full attachment rows with PDF results, a slim summary export, and a normalized case-sector lookup table.
 
 **You do not need:** a database, Docker, Airflow, dbt, or a dashboard. Run three scripts manually on your computer (or use `run_pipeline.py`).
 
@@ -238,6 +238,39 @@ Rules:
 
 Written on every `process_attachments.py` run from the current JSON (not incremental — full replace each run). Uses the same atomic `.tmp` rename and Excel-safe cell sanitization as `attachments.csv`.
 
+### `attachments_summary.csv`
+
+**Path:** `data/processed/attachments_summary.csv`  
+**Encoding:** UTF-8  
+**Grain:** one row per decision PDF attachment (same rows as `attachments.csv`)
+
+A fixed-column subset of `attachments.csv` for analysis and Excel use. Regenerated whenever `attachments.csv` is saved (after metadata merge and after each PDF), so `has_keyword_hit` stays in sync.
+
+**Columns (fixed order):**
+
+| Column | Description |
+|--------|-------------|
+| `att_metadataReference` | Attachment ID |
+| `has_keyword_hit` | `true` if any keyword matched, else `false` |
+| `decision_type_label` | Parsed decision-type label (e.g. `Art. 6(1)(b)`) |
+| `case_caseCompanies` | Case companies |
+| `case_caseInitiationDate` | Case initiation date |
+| `case_caseLastDecisionDate` | Case last decision date |
+| `case_caseInstrument` | Case instrument |
+| `case_caseNumber` | Case number (e.g. `M.10149`) |
+| `case_caseRegulation` | Case regulation |
+| `case_caseSimplified` | Simplified procedure flag |
+| `case_caseTitle` | Case title |
+| `dec_decisionAdoptionDate` | Decision adoption date |
+| `dec_decisionNumber` | Decision number |
+| `dec_decisionOfficialJournalPublicationsPublishedDates` | OJ publication dates |
+| `dec_decisionTypes_code` | Decision type code(s) from flattened metadata |
+| `dec_decisionTypes_label` | Decision type label(s) from flattened metadata |
+| `dec_language` | Decision language |
+| `dec_metadataReference` | Decision metadata reference |
+
+**Note:** `decision_type_label` is the parsed fixed column from `decisionTypes`; `dec_decisionTypes_code` / `dec_decisionTypes_label` are separate flattened metadata columns and may differ in format (e.g. pipe-joined when multiple types).
+
 ---
 
 ## Dependencies
@@ -261,6 +294,7 @@ Pin exact versions only if reproducibility becomes important; minimum versions a
 flowchart LR
   step1[download_json.py] --> step2[process_attachments.py]
   step2 --> csv[attachments.csv]
+  step2 --> summary[attachments_summary.csv]
   step2 --> sectors[case_sectors.csv]
   csv --> step3[summarize_results.py]
   runner[run_pipeline.py] --> step1
@@ -271,7 +305,7 @@ flowchart LR
 | Step | Script | What it does |
 |------|--------|--------------|
 | 1 | `download_json.py` | Fetch JSON from S3 URL, validate, save |
-| 2 | `process_attachments.py` | Flatten JSON, write `case_sectors.csv`, download PDFs, keyword scan, write `attachments.csv` |
+| 2 | `process_attachments.py` | Flatten JSON, write `case_sectors.csv`, download PDFs, keyword scan, write `attachments.csv` and `attachments_summary.csv` |
 | 3 | `summarize_results.py` | Print stats, write `summary.json` |
 | all | `run_pipeline.py` | Run steps 1 → 2 → 3 in order |
 
@@ -358,7 +392,7 @@ If `attachments.csv` already exists, load it and index rows by `(att_attachmentL
 
 **Skip PDF step when:** already processed successfully (`pdf_processed_at` set, `pdf_processing_error` empty).
 
-**Partial progress:** after merging metadata, write `case_sectors.csv` and `attachments.csv` once. After **each** PDF is processed, rewrite `attachments.csv` atomically (via a `.tmp` file). If the run is interrupted (e.g. Ctrl+C), already-finished PDFs remain in the CSV and are skipped on the next run. A PDF interrupted mid-download (before `pdf_processed_at` is set) will be retried. On interrupt, log overall progress as `processed/total` PDFs (all rows in the CSV) plus how many were completed in that run.
+**Partial progress:** after merging metadata, write `case_sectors.csv`, `attachments.csv`, and `attachments_summary.csv` once. After **each** PDF is processed, rewrite `attachments.csv` and `attachments_summary.csv` atomically (via a `.tmp` file). If the run is interrupted (e.g. Ctrl+C), already-finished PDFs remain in the CSV and are skipped on the next run. A PDF interrupted mid-download (before `pdf_processed_at` is set) will be retried. On interrupt, log overall progress as `processed/total` PDFs (all rows in the CSV) plus how many were completed in that run.
 
 **Windows file locks:** if `attachments.csv` is open in Excel or another program, saving may fail with `PermissionError`. The script retries a few times, then stops with a clear message. Close programs that lock the CSV before running. If save still fails after processing a PDF, that PDF’s result is not in the CSV and will be retried on the next run.
 
@@ -382,7 +416,7 @@ If `attachments.csv` already exists, load it and index rows by `(att_attachmentL
 
 - Rows in old CSV but not in new JSON → set `is_active = false`, keep row.
 - `case_sectors.csv` is rewritten from the latest JSON on each run.
-- `attachments.csv` is written after metadata merge and after each PDF (see **Partial progress** above); final write uses fixed columns + sorted dynamic columns.
+- `attachments.csv` and `attachments_summary.csv` are written after metadata merge and after each PDF (see **Partial progress** above); `attachments.csv` uses fixed columns + sorted dynamic columns; `attachments_summary.csv` uses its fixed 18-column schema.
 - All CSV cell values are sanitized on write: embedded `\r`, `\n`, and `\r\n` are replaced with spaces so tools such as Excel do not treat them as extra row breaks.
 
 ### End-of-run message

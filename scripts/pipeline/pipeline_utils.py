@@ -27,6 +27,7 @@ JSON_URL = (
 RAW_JSON_PATH = PROJECT_ROOT / "data/raw/case-data-M.json"
 RAW_JSON_TEMP_PATH = PROJECT_ROOT / "data/raw/case-data-M.json.tmp"
 ATTACHMENTS_CSV_PATH = PROJECT_ROOT / "data/processed/attachments.csv"
+ATTACHMENTS_SUMMARY_CSV_PATH = PROJECT_ROOT / "data/processed/attachments_summary.csv"
 CASE_SECTORS_CSV_PATH = PROJECT_ROOT / "data/processed/case_sectors.csv"
 SUMMARY_JSON_PATH = PROJECT_ROOT / "data/processed/summary.json"
 KEYWORDS_PATH = PROJECT_ROOT / "config/keywords.txt"
@@ -50,6 +51,27 @@ CASE_SECTORS_COLUMNS = [
     "case_caseNumber",
     "case_caseSectors_code",
     "case_caseSectors_label",
+]
+
+ATTACHMENTS_SUMMARY_COLUMNS = [
+    "att_metadataReference",
+    "has_keyword_hit",
+    "decision_type_label",
+    "case_caseCompanies",
+    "case_caseInitiationDate",
+    "case_caseLastDecisionDate",
+    "case_caseInstrument",
+    "case_caseNumber",
+    "case_caseRegulation",
+    "case_caseSimplified",
+    "case_caseTitle",
+    "dec_decisionAdoptionDate",
+    "dec_decisionNumber",
+    "dec_decisionOfficialJournalPublicationsPublishedDates",
+    "dec_decisionTypes_code",
+    "dec_decisionTypes_label",
+    "dec_language",
+    "dec_metadataReference",
 ]
 
 ATTACHMENTS_EXCLUDED_COLUMNS = frozenset(
