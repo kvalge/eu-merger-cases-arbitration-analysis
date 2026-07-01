@@ -37,6 +37,7 @@ eu-merger-cases-arbitration-analysis/
       analyze_decision_number.py
       analyze_metadata_reference.py
       analyze_pdf_processed_at.py
+      run_analyses.py         # run all analysis scripts
     pipeline/
       download_json.py      # fetch case-data-M.json
       pdf_processing.py       # PyMuPDF extract + page-by-page keyword scan
@@ -129,7 +130,15 @@ CSV values are sanitized on write (embedded line breaks → spaces) so Excel ope
 
 ## Analysis scripts
 
-Scripts in [`scripts/analyses/`](scripts/analyses/) read `data/processed/attachments.csv` and write reports to `data/analysis/`:
+Scripts in [`scripts/analyses/`](scripts/analyses/) read `data/processed/attachments.csv` and write reports to `data/analysis/`.
+
+**Run all analyses:**
+
+```bash
+python scripts/analyses/run_analyses.py
+```
+
+**Or run individually:**
 
 ```bash
 python scripts/analyses/analyze_decision_number.py

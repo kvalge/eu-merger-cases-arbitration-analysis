@@ -1,20 +1,20 @@
-Generated at: 2026-06-11T16:55:22+00:00
+Generated at: 2026-07-01T11:39:50+00:00
 
 Column: dec_metadataReference
-Total rows: 11114
-Non-empty rows: 11114
+Total rows: 11137
+Non-empty rows: 11137
 Empty rows: 0
-Unique non-empty values: 10293
+Unique non-empty values: 10315
 
 All values unique? NO — some values appear on more than one row
 
 Duplicate summary:
-  Values that repeat: 187
-  Rows using those values: 1008
-  Extra rows beyond one per value: 821
+  Values that repeat: 188
+  Rows using those values: 1010
+  Extra rows beyond one per value: 822
 
 How many rows share the same value:
-  appears 2 times: 44 value(s)
+  appears 2 times: 45 value(s)
   appears 3 times: 71 value(s)
   appears 4 times: 4 value(s)
   appears 5 times: 2 value(s)

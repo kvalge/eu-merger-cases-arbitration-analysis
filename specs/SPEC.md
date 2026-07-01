@@ -623,8 +623,15 @@ Read `data/processed/attachments.csv` and write human-readable reports to `data/
 | `analyze_metadata_reference.py` | `data/analysis/metadata_reference_uniqueness.txt` |
 | `analyze_pdf_processed_at.py` | `data/analysis/pdf_processed_at_formats.txt` |
 | `analyze_column_value_types.py` | `data/analysis/column_value_types.txt` |
+| `run_analyses.py` | runs all analysis scripts above |
 
 Each report includes a `Generated at:` timestamp. Run from the project root:
+
+```bash
+python scripts/analyses/run_analyses.py
+```
+
+Or individually:
 
 ```bash
 python scripts/analyses/analyze_decision_number.py

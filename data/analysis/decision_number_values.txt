@@ -1,24 +1,24 @@
-Generated at: 2026-06-11T17:07:08+00:00
+Generated at: 2026-07-01T11:39:49+00:00
 
 Column: dec_decisionNumber
-Total rows: 11114
-Non-empty rows: 11114
-Unique values: 10293
+Total rows: 11137
+Non-empty rows: 11137
+Unique values: 10315
 
 Value kinds:
-  numeric: 10560 (95.0%)
-  guid: 554 (5.0%)
+  numeric: 10560 (94.8%)
+  guid: 577 (5.2%)
 
 String length (all rows, including empty):
   length 5: 10560
-  length 36: 554
+  length 36: 577
 
 String length (non-empty only):
   length 5: 10560
-  length 36: 554
+  length 36: 577
 
 Length by value kind:
-  guid: len 36=554
+  guid: len 36=577
   numeric: len 5=10560
 
 Sample values by kind:
