@@ -1,4 +1,28 @@
-"""Summarize attachments.csv metrics and write summary.json."""
+"""Summarize attachments.csv metrics and write summary.json.
+
+How to run (from project root)
+------------------------------
+Standalone:
+
+    python scripts/pipeline/summarize_results.py
+
+Via the full pipeline (step 3, after process_attachments.py):
+
+    python scripts/pipeline/run_pipeline.py
+
+run_pipeline.py runs this script as the last step — no extra flags are passed.
+It is invoked only after download_json.py and process_attachments.py finish
+successfully; if either earlier step fails, summarize_results.py is not run.
+
+Input
+-----
+data/processed/attachments.csv
+
+Output
+------
+- Console (stdout): one line per metric, then ``Summary written to …``
+- File: data/processed/summary.json (UTF-8 JSON with counts and top keywords)
+"""
 
 from __future__ import annotations
 

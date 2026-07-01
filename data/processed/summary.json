@@ -1,10 +1,10 @@
 {
-  "total_attachments": 11118,
-  "active_attachments": 11118,
-  "pdf_processed": 11118,
-  "pdf_errors": 3,
+  "total_attachments": 11137,
+  "active_attachments": 11137,
+  "pdf_processed": 11135,
+  "pdf_errors": 0,
   "keyword_hits": 353,
-  "relevant_art6_art8": 9959,
+  "relevant_art6_art8": 9978,
   "hits_in_relevant": 277,
   "top_matched_keywords": [
     {
@@ -13,18 +13,18 @@
     },
     {
       "keyword": "arbitrag*",
-      "count": 71
+      "count": 75
     },
     {
       "keyword": "Schieds*",
-      "count": 30
-    },
-    {
-      "keyword": "διαιτη*",
-      "count": 13
+      "count": 36
     },
     {
       "keyword": "arbitraj*",
+      "count": 14
+    },
+    {
+      "keyword": "διαιτη*",
       "count": 13
     },
     {
@@ -33,10 +33,10 @@
     },
     {
       "keyword": "Schiedsverfahren* | Schieds*",
-      "count": 7
+      "count": 5
     },
     {
-      "keyword": "Schiedsgericht* | Schiedsverfahren* | Schieds*",
+      "keyword": "skiljedom*",
       "count": 5
     },
     {
@@ -44,9 +44,9 @@
       "count": 5
     },
     {
-      "keyword": "arbitrag* | tribunal arbitral*",
-      "count": 5
+      "keyword": "välimies* | välimiesmenettel*",
+      "count": 3
     }
   ],
-  "generated_at": "2026-06-16T20:58:03+00:00"
+  "generated_at": "2026-07-01T11:10:01+00:00"
 }

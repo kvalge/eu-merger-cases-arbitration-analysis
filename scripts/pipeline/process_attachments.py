@@ -8,11 +8,23 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import asdict
 from pathlib import Path
 
 import requests
 
+from pdf_processing import (
+    PdfJobResult,
+    apply_pdf_result,
+    init_pdf_worker,
+    pdf_job_from_row,
+    process_pdf_job,
+    process_pdf_job_packed,
+)
+from download_json import download_json as fetch_case_json
 from pipeline_utils import (
     ATT_DYNAMIC_EXCLUDE,
     ATTACHMENTS_CSV_PATH,
@@ -27,25 +39,23 @@ from pipeline_utils import (
     RAW_JSON_PATH,
     build_case_sector_rows,
     empty_pdf_columns,
-    extract_pdf_text,
     first_list_value,
     flatten_metadata,
     is_successfully_processed,
     load_keyword_rules,
-    match_keywords,
     normalize_decision_number,
     parse_code_label_items,
     preserve_pdf_columns,
-    request_with_retries,
     sanitize_csv_cell,
     setup_logging,
     should_process_pdf,
     strip_attachment_excluded_columns,
-    utc_now_iso,
 )
 
 CSV_SAVE_RETRIES = 5
 CSV_SAVE_RETRY_DELAYS = (0.5, 1.0, 2.0, 3.0, 5.0)
+DEFAULT_PDF_WORKERS = 6
+DEFAULT_PDF_SAVE_EVERY = 100
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,6 +72,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Retry rows with download errors",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "Parallel PDF workers (default: 6). "
+            "Uses a process pool when > 1 for CPU-bound PDF parsing."
+        ),
+    )
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=None,
+        help="Write CSV exports after every N PDFs (default: 100)",
+    )
     args = parser.parse_args()
 
     if args.test_limit is None:
@@ -71,6 +96,18 @@ def parse_args() -> argparse.Namespace:
 
     if not args.retry_downloads and os.environ.get("RETRY_DOWNLOAD_ERRORS") == "1":
         args.retry_downloads = True
+
+    if args.workers is None:
+        env_workers = os.environ.get("PDF_WORKERS")
+        args.workers = int(env_workers) if env_workers else DEFAULT_PDF_WORKERS
+    if args.workers < 1:
+        parser.error("--workers must be at least 1")
+
+    if args.save_every is None:
+        env_save_every = os.environ.get("PDF_SAVE_EVERY")
+        args.save_every = int(env_save_every) if env_save_every else DEFAULT_PDF_SAVE_EVERY
+    if args.save_every < 1:
+        parser.error("--save-every must be at least 1")
 
     return args
 
@@ -226,98 +263,21 @@ def count_overall_pdf_progress(rows: list[dict[str, str]]) -> tuple[int, int]:
     return processed, total
 
 
-def resolve_attachment_language(row: dict[str, str]) -> str:
-    """Read attachment language from flattened metadata columns."""
-    language = row.get("att_attachmentLanguage") or row.get("att_language") or ""
-    return language.strip().upper()
+def collect_pending_rows(
+    rows: list[dict[str, str]],
+    retry_downloads: bool,
+    test_limit: int | None,
+) -> list[dict[str, str]]:
+    """Return attachment rows that still need PDF processing this run."""
+    pending = [row for row in rows if should_process_pdf(row, retry_downloads)]
+    if test_limit is None:
+        return pending
+    return pending[:test_limit]
 
 
-def process_pdf_row(
-    row: dict[str, str],
-    session: requests.Session,
-    rules_by_language: dict,
-    request_delay: float,
-) -> None:
-    """Download, extract, and keyword-scan one attachment row."""
-    link = row["att_attachmentLink"]
-    ref = row["att_metadataReference"]
-    language = resolve_attachment_language(row)
-
-    if not language:
-        logging.warning("Missing attachment language for %s (%s)", ref, link)
-        row.update(
-            {
-                "has_keyword_hit": "false",
-                "matchedKeywords": "",
-                "matchedLanguage": "",
-                "matchContext": "",
-                "pdf_processed_at": utc_now_iso(),
-                "pdf_processing_error": "",
-            }
-        )
-        return
-
-    try:
-        response = request_with_retries("GET", link, session=session)
-        pdf_bytes = response.content
-        text = extract_pdf_text(pdf_bytes)
-
-        if not rules_by_language.get(language):
-            logging.warning("No keyword rules for language %s (%s)", language, ref)
-            row.update(
-                {
-                    "has_keyword_hit": "false",
-                    "matchedKeywords": "",
-                    "matchedLanguage": language,
-                    "matchContext": "",
-                    "pdf_processed_at": utc_now_iso(),
-                    "pdf_processing_error": "",
-                }
-            )
-            return
-
-        hit, matched_keywords, matched_language, match_context = match_keywords(
-            text, language, rules_by_language
-        )
-
-        row.update(
-            {
-                "has_keyword_hit": "true" if hit else "false",
-                "matchedKeywords": matched_keywords,
-                "matchedLanguage": matched_language,
-                "matchContext": match_context,
-                "pdf_processed_at": utc_now_iso(),
-                "pdf_processing_error": "",
-            }
-        )
-
-    except requests.RequestException as exc:
-        logging.error("Download failed for %s (%s): %s", ref, link, exc)
-        row.update(
-            {
-                "has_keyword_hit": "false",
-                "matchedKeywords": "",
-                "matchedLanguage": "",
-                "matchContext": "",
-                "pdf_processed_at": utc_now_iso(),
-                "pdf_processing_error": f"download: {exc}",
-            }
-        )
-    except Exception as exc:
-        logging.error("Processing failed for %s (%s): %s", ref, link, exc)
-        row.update(
-            {
-                "has_keyword_hit": "false",
-                "matchedKeywords": "",
-                "matchedLanguage": "",
-                "matchContext": "",
-                "pdf_processed_at": utc_now_iso(),
-                "pdf_processing_error": f"processing: {exc}",
-            }
-        )
-    finally:
-        if request_delay > 0:
-            time.sleep(request_delay)
+def record_pdf_result(result: PdfJobResult, row: dict[str, str]) -> None:
+    """Apply worker output to the in-memory attachment row."""
+    apply_pdf_result(row, result)
 
 
 def write_csv(
@@ -373,6 +333,18 @@ def write_columns_csv(
 def write_case_sectors_csv(rows: list[dict[str, str]], path: Path) -> None:
     """Atomically write the normalized case-sector lookup CSV."""
     write_columns_csv(rows, CASE_SECTORS_COLUMNS, path)
+
+
+def write_attachment_exports(
+    data: dict,
+    rows: list[dict[str, str]],
+    dynamic_columns: set[str],
+) -> int:
+    """Write attachments.csv, attachments_summary.csv, and case_sectors.csv."""
+    write_csv(rows, dynamic_columns, ATTACHMENTS_CSV_PATH)
+    case_sector_rows = build_case_sector_rows(data, rows)
+    write_case_sectors_csv(case_sector_rows, CASE_SECTORS_CSV_PATH)
+    return len(case_sector_rows)
 
 
 def replace_csv_atomically(temp_path: Path, path: Path) -> None:
@@ -455,10 +427,121 @@ def log_run_summary(
         )
 
 
+def process_pdfs_parallel(
+    data: dict,
+    rows: list[dict[str, str]],
+    dynamic_columns: set[str],
+    pending_rows: list[dict[str, str]],
+    rules_by_language: dict,
+    request_delay: float,
+    workers: int,
+    save_every: int,
+) -> tuple[int, int, int, float | None]:
+    """
+    Process pending PDFs sequentially or with a process pool.
+
+    Returns (processed_count, hit_count, error_count, started_at).
+    """
+    if not pending_rows:
+        return 0, 0, 0, None
+
+    processed_count = 0
+    hit_count = 0
+    error_count = 0
+    completed_since_save = 0
+    pdf_processing_started_at = time.monotonic()
+    save_lock = threading.Lock()
+    row_by_ref = {row["att_metadataReference"]: row for row in pending_rows}
+    pool_mode = "sequential" if workers == 1 else f"{workers} processes"
+
+    logging.info(
+        "Starting PDF processing: %s PDF(s) (%s, save every %s)",
+        len(pending_rows),
+        pool_mode,
+        save_every,
+    )
+
+    def save_exports(force: bool = False) -> None:
+        nonlocal completed_since_save
+        with save_lock:
+            if not force and completed_since_save < save_every:
+                return
+            write_attachment_exports(data, rows, dynamic_columns)
+            completed_since_save = 0
+
+    def record_result(result: PdfJobResult) -> None:
+        nonlocal processed_count, hit_count, error_count, completed_since_save
+        row = row_by_ref[result.att_metadataReference]
+        record_pdf_result(result, row)
+
+        processed_count += 1
+        if row.get("has_keyword_hit") == "true":
+            hit_count += 1
+        if row.get("pdf_processing_error"):
+            error_count += 1
+        completed_since_save += 1
+
+        if workers == 1:
+            logging.info(
+                "Processing PDF %s/%s: %s",
+                processed_count,
+                len(pending_rows),
+                result.att_metadataReference,
+            )
+        elif processed_count % 100 == 0:
+            elapsed = time.monotonic() - pdf_processing_started_at
+            logging.info(
+                "Progress: processed=%s/%s hits=%s errors=%s elapsed=%s",
+                processed_count,
+                len(pending_rows),
+                hit_count,
+                error_count,
+                format_duration(elapsed),
+            )
+
+        save_exports()
+
+    if workers == 1:
+        with requests.Session() as session:
+            for row in pending_rows:
+                result = process_pdf_job(
+                    pdf_job_from_row(row),
+                    rules_by_language,
+                    request_delay,
+                    session=session,
+                )
+                record_result(result)
+    else:
+        job_payloads = [asdict(pdf_job_from_row(row)) for row in pending_rows]
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=init_pdf_worker,
+            initargs=(rules_by_language, request_delay),
+        ) as executor:
+            futures = [
+                executor.submit(process_pdf_job_packed, job_dict)
+                for job_dict in job_payloads
+            ]
+            for future in as_completed(futures):
+                record_result(future.result())
+
+    if completed_since_save > 0:
+        save_exports(force=True)
+
+    return processed_count, hit_count, error_count, pdf_processing_started_at
+
+
+def ensure_case_json() -> int:
+    """Download case JSON when the local raw file is missing."""
+    if RAW_JSON_PATH.exists():
+        return 0
+    logging.info("Raw JSON not found at %s — downloading first", RAW_JSON_PATH)
+    return fetch_case_json()
+
+
 def process_attachments(args: argparse.Namespace) -> int:
     """Run flattening, incremental PDF processing, and CSV export."""
-    if not RAW_JSON_PATH.exists():
-        logging.error("Missing JSON file: %s (run download_json.py first)", RAW_JSON_PATH)
+    if ensure_case_json() != 0:
         return 1
 
     if not KEYWORDS_PATH.exists():
@@ -472,14 +555,6 @@ def process_attachments(args: argparse.Namespace) -> int:
     rows = merge_rows(new_rows, existing_by_key, args.retry_downloads)
     dynamic_columns = collect_dynamic_columns(rows)
 
-    case_sector_rows = build_case_sector_rows(data)
-    write_case_sectors_csv(case_sector_rows, CASE_SECTORS_CSV_PATH)
-    logging.info(
-        "Wrote %s case-sector row(s) to %s",
-        len(case_sector_rows),
-        CASE_SECTORS_CSV_PATH,
-    )
-
     empty_decision_numbers = sum(1 for row in rows if not row.get("dec_decisionNumber"))
     if empty_decision_numbers:
         logging.warning(
@@ -487,63 +562,43 @@ def process_attachments(args: argparse.Namespace) -> int:
             empty_decision_numbers,
         )
 
-    write_csv(rows, dynamic_columns, ATTACHMENTS_CSV_PATH)
+    case_sector_count = write_attachment_exports(data, rows, dynamic_columns)
+    logging.info(
+        "Wrote %s case-sector row(s) to %s",
+        case_sector_count,
+        CASE_SECTORS_CSV_PATH,
+    )
 
     rules_by_language = load_keyword_rules(KEYWORDS_PATH)
     request_delay = float(os.environ.get("REQUEST_DELAY_SECONDS", "0"))
+    pending_rows = collect_pending_rows(rows, args.retry_downloads, args.test_limit)
 
     processed_count = 0
     hit_count = 0
     error_count = 0
-    pdfs_to_process = count_pdfs_to_process(rows, args.retry_downloads, args.test_limit)
     pdf_processing_started_at: float | None = None
     exit_code = 0
 
     try:
-        with requests.Session() as session:
-            for row in rows:
-                if args.test_limit is not None and processed_count >= args.test_limit:
-                    break
-                if not should_process_pdf(row, args.retry_downloads):
-                    continue
-
-                if pdf_processing_started_at is None:
-                    pdf_processing_started_at = time.monotonic()
-                    logging.info(
-                        "Starting PDF processing: %s PDF(s) to process",
-                        pdfs_to_process,
-                    )
-
-                processed_count += 1
-                ref = row["att_metadataReference"]
-                logging.info(
-                    "Processing PDF %s/%s: %s",
-                    processed_count,
-                    pdfs_to_process,
-                    ref,
-                )
-
-                process_pdf_row(row, session, rules_by_language, request_delay)
-                write_csv(rows, dynamic_columns, ATTACHMENTS_CSV_PATH)
-
-                if row.get("has_keyword_hit") == "true":
-                    hit_count += 1
-                if row.get("pdf_processing_error"):
-                    error_count += 1
-
-                if processed_count % 100 == 0:
-                    elapsed = time.monotonic() - pdf_processing_started_at
-                    logging.info(
-                        "Progress: processed=%s/%s hits=%s errors=%s elapsed=%s",
-                        processed_count,
-                        pdfs_to_process,
-                        hit_count,
-                        error_count,
-                        format_duration(elapsed),
-                    )
+        processed_count, hit_count, error_count, pdf_processing_started_at = (
+            process_pdfs_parallel(
+                data,
+                rows,
+                dynamic_columns,
+                pending_rows,
+                rules_by_language,
+                request_delay,
+                args.workers,
+                args.save_every,
+            )
+        )
 
     except KeyboardInterrupt:
         exit_code = 130
+        try:
+            write_attachment_exports(data, rows, dynamic_columns)
+        except PermissionError as exc:
+            logging.error("%s", exc)
         overall_processed, overall_total = count_overall_pdf_progress(rows)
         logging.warning(
             "Interrupted — %s/%s PDFs processed overall (%s this run) — progress saved to %s",

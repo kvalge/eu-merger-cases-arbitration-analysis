@@ -7,11 +7,9 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-import pdfplumber
 import requests
 
 USER_AGENT = "eu-merger-cases-arbitration-analysis/1.0"
@@ -51,6 +49,10 @@ CASE_SECTORS_COLUMNS = [
     "case_caseNumber",
     "case_caseSectors_code",
     "case_caseSectors_label",
+    "case_caseSectors_code_level1",
+    "case_caseSectors_code_level2",
+    "case_caseSectors_code_level3",
+    "has_keyword_hit",
 ]
 
 ATTACHMENTS_SUMMARY_COLUMNS = [
@@ -359,9 +361,43 @@ def parse_code_label_items(items: list[Any] | None) -> tuple[str, str]:
     return " | ".join(codes), " | ".join(labels)
 
 
-def build_case_sector_rows(data: dict[str, Any]) -> list[dict[str, str]]:
+def parse_sector_code_levels(code: str) -> tuple[str, str, str]:
+    """
+    Split a NACE sector code into three aggregation levels by ``_`` segments.
+
+    Example ``NaceSectorsE_38_2_1`` → ``NaceSectorsE``, ``NaceSectorsE_38``,
+    ``NaceSectorsE_38_2``. When a level is missing, repeat the previous level.
+    """
+    parts = code.split("_")
+    level1 = parts[0] if parts else ""
+    level2 = "_".join(parts[:2]) if len(parts) >= 2 else level1
+    level3 = "_".join(parts[:3]) if len(parts) >= 3 else level2
+    return level1, level2, level3
+
+
+def build_case_keyword_hits(attachment_rows: list[dict[str, str]]) -> dict[str, str]:
+    """Map case number to ``1`` if any attachment hit, else ``0``."""
+    case_hit: dict[str, bool] = {}
+
+    for row in attachment_rows:
+        case_number = row.get("case_caseNumber", "")
+        if not case_number:
+            continue
+        if row.get("has_keyword_hit") == "true":
+            case_hit[case_number] = True
+        elif case_number not in case_hit:
+            case_hit[case_number] = False
+
+    return {case_number: "1" if hit else "0" for case_number, hit in case_hit.items()}
+
+
+def build_case_sector_rows(
+    data: dict[str, Any],
+    attachment_rows: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
     """Build one row per case sector (case number repeated when needed)."""
     rows: list[dict[str, str]] = []
+    case_keyword_hits = build_case_keyword_hits(attachment_rows or [])
 
     for case in data.values():
         case_meta = case.get("metadata") or {}
@@ -369,12 +405,19 @@ def build_case_sector_rows(data: dict[str, Any]) -> list[dict[str, str]]:
         if not case_number:
             continue
 
+        case_has_hit = case_keyword_hits.get(case_number, "0")
+
         for code, label in parse_code_label_item_list(case_meta.get("caseSectors")):
+            level1, level2, level3 = parse_sector_code_levels(code)
             rows.append(
                 {
                     "case_caseNumber": case_number,
                     "case_caseSectors_code": code,
                     "case_caseSectors_label": label,
+                    "case_caseSectors_code_level1": level1,
+                    "case_caseSectors_code_level2": level2,
+                    "case_caseSectors_code_level3": level3,
+                    "has_keyword_hit": case_has_hit,
                 }
             )
 
@@ -480,13 +523,6 @@ def match_keywords(
 
     context = extract_match_context(text, earliest_pos or 0)
     return True, " | ".join(matched_patterns), language.upper(), context
-
-
-def extract_pdf_text(pdf_bytes: bytes) -> str:
-    """Extract text from PDF bytes using pdfplumber."""
-    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
-        pages = [page.extract_text() or "" for page in pdf.pages]
-    return "\n".join(pages)
 
 
 def is_successfully_processed(row: dict[str, str]) -> bool:

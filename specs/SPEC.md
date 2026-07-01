@@ -13,7 +13,7 @@ A small **Python** project that:
 
 **You do not need:** a database, Docker, Airflow, dbt, or a dashboard. Run three scripts manually on your computer (or use `run_pipeline.py`).
 
-**Typical runtime:** downloading and scanning all PDFs takes **several hours** (tens of thousands of files). Use a small test limit first.
+**Typical runtime:** downloading and scanning all PDFs takes **several hours** (~11k PDFs). Use `--test-limit` first; for full runs use `--workers` and `--save-every` to speed up (see **Parallel PDF processing** below).
 
 **Python:** 3.10 or newer.
 
@@ -21,7 +21,7 @@ A small **Python** project that:
 
 | Folder | Scripts |
 |--------|---------|
-| [`scripts/pipeline/`](../scripts/pipeline/) | `download_json.py`, `process_attachments.py`, `summarize_results.py`, `run_pipeline.py`, `pipeline_utils.py` |
+| [`scripts/pipeline/`](../scripts/pipeline/) | `download_json.py`, `process_attachments.py`, `summarize_results.py`, `run_pipeline.py`, `pipeline_utils.py`, `pdf_processing.py` |
 | [`scripts/analyses/`](../scripts/analyses/) | CSV analysis scripts; output to `data/analysis/*.txt` |
 
 Run all commands from the project root.
@@ -118,24 +118,40 @@ Each list item parses as an object with `code` and `label`:
 | Column | Description |
 |--------|-------------|
 | `case_caseNumber` | Case number (e.g. `M.10149`); repeated when a case has multiple sectors |
-| `case_caseSectors_code` | One sector code per row |
+| `case_caseSectors_code` | Full sector code for this row |
 | `case_caseSectors_label` | Matching sector label |
+| `case_caseSectors_code_level1` | Sector code truncated before the 1st `_` (e.g. `NaceSectorsE`) |
+| `case_caseSectors_code_level2` | Truncated before the 2nd `_` (e.g. `NaceSectorsE_38`) |
+| `case_caseSectors_code_level3` | Truncated before the 3rd `_` if present (e.g. `NaceSectorsE_38_2`); otherwise same as level 2 |
+| `has_keyword_hit` | `1` if the case has at least one keyword hit in `attachments.csv`, else `0` |
+
+**Sector code level parsing** (from `case_caseSectors_code`, split on `_`):
+
+| Full code | level1 | level2 | level3 |
+|-----------|--------|--------|--------|
+| `NaceSectorsE_38_2_1` | `NaceSectorsE` | `NaceSectorsE_38` | `NaceSectorsE_38_2` |
+| `NaceSectorsE_38` | `NaceSectorsE` | `NaceSectorsE_38` | `NaceSectorsE_38` |
+| `NaceSectorsG_46` | `NaceSectorsG` | `NaceSectorsG_46` | `NaceSectorsG_46` |
 
 **Parsing rules:**
 
 1. For each case in the JSON, read `caseNumber` (first list value).
 2. For each item in `caseSectors`, parse the string as JSON and emit one row with that item’s `code` and `label`.
-3. Cases with missing or empty `caseSectors` → no rows for that case.
-4. Rows are sorted by `case_caseNumber`, then `case_caseSectors_code`, then `case_caseSectors_label`.
+3. Derive `case_caseSectors_code_level1` … `level3` from the full `code` as above.
+4. Set `has_keyword_hit` from attachment rows: `1` when any attachment with the same `case_caseNumber` has `has_keyword_hit = true`, else `0`.
+5. Cases with missing or empty `caseSectors` → no rows for that case.
+6. Rows are sorted by `case_caseNumber`, then `case_caseSectors_code`, then `case_caseSectors_label`.
 
 **Example** (case `M.10149` with two sectors):
 
-| `case_caseNumber` | `case_caseSectors_code` | `case_caseSectors_label` |
-|-------------------|-------------------------|--------------------------|
-| `M.10149` | `NaceSectorsH_51_1` | `H.51.1 - Passenger air transport` |
-| `M.10149` | `NaceSectorsH_50_1` | `H.50.1 - Sea and coastal passenger water transport` |
+| `case_caseNumber` | `case_caseSectors_code` | `case_caseSectors_label` | `…_level1` | `…_level2` | `…_level3` | `has_keyword_hit` |
+|-------------------|-------------------------|--------------------------|------------|------------|------------|-------------------|
+| `M.10149` | `NaceSectorsH_51_1` | `H.51.1 - Passenger air transport` | `NaceSectorsH` | `NaceSectorsH_51` | `NaceSectorsH_51_1` | `0` |
+| `M.10149` | `NaceSectorsH_50_1` | `H.50.1 - Sea and coastal passenger water transport` | `NaceSectorsH` | `NaceSectorsH_50` | `NaceSectorsH_50_1` | `0` |
 
 **Join to attachments:** use `case_caseNumber` on both files (`attachments.csv` has a `case_caseNumber` column from flattened case metadata).
+
+**Regeneration:** `case_sectors.csv` is rewritten whenever `attachments.csv` is saved (frequency controlled by `--save-every`), so `has_keyword_hit` stays in sync with attachment keyword results.
 
 **Excluded from `attachments.csv`:** `caseSectors` is not flattened into `case_caseSectors_code` / `case_caseSectors_label` on attachment rows. Legacy `sector_code` / `sector_label` fixed columns are also removed.
 
@@ -236,7 +252,7 @@ Rules:
 **Encoding:** UTF-8  
 **Grain:** one row per case sector (see **Sector (`case_sectors.csv`)** above)
 
-Written on every `process_attachments.py` run from the current JSON (not incremental — full replace each run). Uses the same atomic `.tmp` rename and Excel-safe cell sanitization as `attachments.csv`.
+Written on every `process_attachments.py` run from the current JSON. Regenerated whenever `attachments.csv` is saved (after metadata merge and after each PDF) so `has_keyword_hit` stays in sync. Uses the same atomic `.tmp` rename and Excel-safe cell sanitization as `attachments.csv`.
 
 ### `attachments_summary.csv`
 
@@ -279,8 +295,12 @@ A fixed-column subset of `attachments.csv` for analysis and Excel use. Regenerat
 
 ```
 requests>=2.31.0
+pymupdf>=1.24.0
 pdfplumber>=0.11.0
 ```
+
+- **PyMuPDF** (`fitz`) — primary PDF text extraction (fast).
+- **pdfplumber** — fallback extractor when PyMuPDF fails (quality safety net).
 
 Pin exact versions only if reproducibility becomes important; minimum versions above are sufficient for development.
 
@@ -321,15 +341,16 @@ Runs the full pipeline in order:
 python scripts/pipeline/run_pipeline.py
 python scripts/pipeline/run_pipeline.py --test-limit 100
 python scripts/pipeline/run_pipeline.py --retry-downloads
+python scripts/pipeline/run_pipeline.py --workers 8 --save-every 50
 ```
 
 **Behaviour:**
 
 1. Run `download_json.py` logic (or subprocess). On failure: **stop**; do not run later steps.
-2. Run `process_attachments.py` with forwarded CLI flags (`--test-limit`, `--retry-downloads`).
+2. Run `process_attachments.py` with forwarded CLI flags (`--test-limit`, `--retry-downloads`, `--workers`, `--save-every`).
 3. Run `summarize_results.py`. On failure: **stop** and exit non-zero.
 
-Forward any unrecognized flags to `process_attachments.py` only.
+`--workers` and `--save-every` are forwarded to `process_attachments.py` only.
 
 ---
 
@@ -361,7 +382,10 @@ python scripts/pipeline/download_json.py
 python scripts/pipeline/process_attachments.py
 python scripts/pipeline/process_attachments.py --test-limit 100    # smoke test: only 100 PDFs
 python scripts/pipeline/process_attachments.py --retry-downloads   # retry failed downloads
+python scripts/pipeline/process_attachments.py --workers 8 --save-every 50   # parallel PDFs
 ```
+
+If `data/raw/case-data-M.json` is missing, the script **downloads it automatically** (same logic as `download_json.py`) before flattening.
 
 ### Flatten JSON
 
@@ -392,37 +416,72 @@ If `attachments.csv` already exists, load it and index rows by `(att_attachmentL
 
 **Skip PDF step when:** already processed successfully (`pdf_processed_at` set, `pdf_processing_error` empty).
 
-**Partial progress:** after merging metadata, write `case_sectors.csv`, `attachments.csv`, and `attachments_summary.csv` once. After **each** PDF is processed, rewrite `attachments.csv` and `attachments_summary.csv` atomically (via a `.tmp` file). If the run is interrupted (e.g. Ctrl+C), already-finished PDFs remain in the CSV and are skipped on the next run. A PDF interrupted mid-download (before `pdf_processed_at` is set) will be retried. On interrupt, log overall progress as `processed/total` PDFs (all rows in the CSV) plus how many were completed in that run.
+**Partial progress:** after merging metadata, write `case_sectors.csv`, `attachments.csv`, and `attachments_summary.csv` once. After PDF processing, rewrite all three atomically (via `.tmp` files). By default this happens every **100** PDFs (`--save-every 100`). Use `--save-every 1` for maximum interrupt safety. On Ctrl+C, the script attempts a final save before exiting.
 
 **Windows file locks:** if `attachments.csv` is open in Excel or another program, saving may fail with `PermissionError`. The script retries a few times, then stops with a clear message. Close programs that lock the CSV before running. If save still fails after processing a PDF, that PDF’s result is not in the CSV and will be retried on the next run.
+
+### Parallel PDF processing (`pdf_processing.py`)
+
+PDF download, extraction, and keyword scanning live in **`pdf_processing.py`** (separate from CSV/metadata logic in `process_attachments.py`).
+
+**Extraction:** PyMuPDF reads pages one at a time. On failure, the same PDF is retried with pdfplumber so results stay as complete as before.
+
+**Keyword scan:** pages are scanned in order against accumulated text. When a keyword hit is found, remaining pages are skipped (same match semantics as scanning the full document, including AND rules across pages). No-hit PDFs still read all pages.
+
+**Parallelism:** `--workers 1` runs sequentially in the main process. `--workers N` > 1 uses a **`ProcessPoolExecutor`** so CPU-bound PDF parsing runs in parallel (better than threads on multi-core machines). Each worker has its own HTTP session. Tuned for a **16 GB RAM** desktop: default **6** workers.
+
+| Bottleneck | What helps |
+|------------|------------|
+| PDF text extraction (CPU) | `--workers 6` (process pool) |
+| Network download time | moderate `--workers` (4–6) |
+| Rewriting large CSV files | `--save-every 100` (default) or higher |
+
+**Recommended full run** (defaults, no extra flags needed):
+
+```bash
+python scripts/pipeline/process_attachments.py
+```
+
+**Explicit tuning:**
+
+```bash
+python scripts/pipeline/process_attachments.py --workers 6 --save-every 100
+```
+
+**Trade-offs:**
+
+- Higher `--workers` uses more RAM and CPU — 6 is a sensible default on 16 GB RAM; use `--workers 4` on 8 GB machines.
+- `REQUEST_DELAY_SECONDS` applies **per worker** after each PDF.
+- `--save-every N` > 1 means CSV exports run less often; up to `N-1` completed PDFs may be missing from disk if killed mid-run (Ctrl+C still triggers a final save attempt).
+- With `--workers` > 1, per-PDF start logs are suppressed; progress is logged every **100** completed PDFs.
 
 ### PDF step (per attachment)
 
 1. **Language** — read `att_attachmentLanguage`, fallback `att_language`. If missing: log warning, set `has_keyword_hit = false`, set `pdf_processed_at`, continue (no `pdf_processing_error` unless download/processing fails).
 2. **Download** — `requests` with **3 retries** and exponential backoff (1 s, 2 s, 4 s), 120 s timeout, User-Agent `eu-merger-cases-arbitration-analysis/1.0`. Stream response in memory; do not cache PDFs on disk.
-3. **Extract text** — `pdfplumber`, all pages, join with newlines.
-4. **Keyword match** — load rules for that language from `keywords.txt` (see **Keyword file parsing grammar**):
+3. **Extract text** — PyMuPDF page-by-page (`pdf_processing.py`); pdfplumber fallback on extraction errors.
+4. **Keyword match** — scan accumulated page text; stop early on first hit; otherwise scan all pages. Rules from `keywords.txt` (see **Keyword file parsing grammar**):
    - Convert `*` to regex `.*`, case-insensitive.
    - AND groups: all sub-patterns must match.
    - OR: any line for that language can match.
 5. **On match:** `has_keyword_hit = true`, fill `matchedKeywords`, `matchedLanguage`, `matchContext` (150 characters around earliest match, whitespace normalized).
 6. **On no match:** `has_keyword_hit = false`, clear match fields.
 7. **On error:** set `pdf_processing_error` to `download: …` or `processing: …`; still set `pdf_processed_at`.
-8. Optional delay: `REQUEST_DELAY_SECONDS` between requests (politeness).
-9. **Progress:** log at INFO when each PDF starts (`Processing PDF N/M: metadataReference`). Every **100** PDFs, log a summary line with counts and elapsed time so far.
+8. Optional delay: `REQUEST_DELAY_SECONDS` between requests per worker (politeness).
+9. **Progress:** with `--workers 1`, log at INFO when each PDF starts (`Processing PDF N/M: metadataReference`). With `--workers` > 1, log a summary every **100** completed PDFs. Every **100** PDFs (either mode), log counts and elapsed time.
 10. **Completion:** log total PDF processing time in the final summary line (`Processed PDFs: N | Hits: H | Errors: E | Time: …`).
 
 ### After processing
 
 - Rows in old CSV but not in new JSON → set `is_active = false`, keep row.
-- `case_sectors.csv` is rewritten from the latest JSON on each run.
-- `attachments.csv` and `attachments_summary.csv` are written after metadata merge and after each PDF (see **Partial progress** above); `attachments.csv` uses fixed columns + sorted dynamic columns; `attachments_summary.csv` uses its fixed 18-column schema.
+- `case_sectors.csv` is rewritten whenever `attachments.csv` is saved (includes latest sector levels and case-level `has_keyword_hit`).
+- `attachments.csv` and `attachments_summary.csv` are written after metadata merge and after every `--save-every` batch of PDFs; `attachments.csv` uses fixed columns + sorted dynamic columns; `attachments_summary.csv` uses its fixed 18-column schema.
 - All CSV cell values are sanitized on write: embedded `\r`, `\n`, and `\r\n` are replaced with spaces so tools such as Excel do not treat them as extra row breaks.
 
 ### End-of-run message
 
 ```
-Processed PDFs: N | Hits: H | Errors: E | Time: 1h 23m 45s
+Processed PDFs: N | Hits: H | Errors: E | Time: h m s
 ```
 
 If `E > 0`, also print: `Some downloads failed — re-run with --retry-downloads`
@@ -435,7 +494,11 @@ If `E > 0`, also print: `Some downloads failed — re-run with --retry-downloads
 | `TEST_LIMIT` | none | Same as `--test-limit` |
 | `--retry-downloads` | off | Retry rows with `download:` errors |
 | `RETRY_DOWNLOAD_ERRORS=1` | off | Same as `--retry-downloads` |
-| `REQUEST_DELAY_SECONDS` | `0` | Seconds to wait between PDF downloads |
+| `--workers N` | `6` | Parallel PDF workers (`PDF_WORKERS`); uses a process pool when > 1 |
+| `PDF_WORKERS` | none | Same as `--workers` |
+| `--save-every N` | `100` | Write CSV exports after every N PDFs (`PDF_SAVE_EVERY`) |
+| `PDF_SAVE_EVERY` | none | Same as `--save-every` |
+| `REQUEST_DELAY_SECONDS` | `0` | Seconds to wait between PDF downloads (per worker) |
 
 ### Logging
 
@@ -513,21 +576,24 @@ pip install -r requirements.txt
 
 # 4. Add config/keywords.txt (see Keyword configuration above)
 
-# 5. Run pipeline
-python scripts/pipeline/run_pipeline.py --test-limit 10   # small test first
+# 5. Run pipeline (smoke test — 10 PDFs only)
+python scripts/pipeline/run_pipeline.py --test-limit 10
+
+# 6. Run full pipeline (all PDFs — no limit; ~2–3 h with default 6 workers)
+python scripts/pipeline/run_pipeline.py
 
 # Or step by step:
 python scripts/pipeline/download_json.py
 python scripts/pipeline/process_attachments.py --test-limit 10
 python scripts/pipeline/summarize_results.py
 
-# 6. Full run (hours)
+# 7. Full run step by step — defaults use 6 workers + save every 100
 python scripts/pipeline/download_json.py                         # refresh JSON
-python scripts/pipeline/process_attachments.py                   # all remaining PDFs
+python scripts/pipeline/process_attachments.py
 python scripts/pipeline/summarize_results.py
 ```
 
-**Updating later:** run `download_json.py` again, then `process_attachments.py`. Metadata refreshes for all rows; only new or failed PDFs are downloaded.
+**Updating later:** run `download_json.py` again, then `process_attachments.py`. Metadata refreshes for all rows; only new or failed PDFs are downloaded. Pass `--workers` / `--save-every` on subsequent PDF runs as needed.
 
 ---
 
